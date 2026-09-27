@@ -17,6 +17,7 @@ pub mod hud;
 pub mod input;
 pub mod lobby;
 pub mod lockstep;
+pub mod nebula;
 pub mod palette;
 pub mod render;
 pub mod web;
@@ -234,6 +235,7 @@ pub fn logic_plugin(app: &mut App) {
 pub fn view_plugin(app: &mut App) {
     app.add_plugins((
         camera::plugin,
+        nebula::plugin,
         render::plugin,
         input::plugin,
         hud::plugin,

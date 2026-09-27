@@ -161,6 +161,15 @@ Classic RTS micro:
 The view is rotated so your HQ sits at the bottom, with your neighbours to
 the left and right.
 
+## Background
+
+Behind the ring hangs a faint procedural nebula, made with btl's algorithm
+(github.com/barafael/btl): three random expression trees, one per colour
+channel, grown from a weighted grammar, compiled to stack bytecode and
+evaluated per pixel over `(x, y, t)`. `t` follows a two-minute sine, so the
+field slowly wavers back and forth. The seed is the room name, so everyone
+in a room sees the same sky.
+
 ## Architecture
 
 ### Networking: host-sequenced lockstep

@@ -35,6 +35,11 @@ opt-level = 2
 [profile.dev.package.cake-ai]
 opt-level = 2
 
+# The front-end re-renders the nebula texture and walks every entity each
+# frame; unoptimised, the nebula alone costs ~10 ms a render.
+[profile.dev.package.cake-bevy]
+opt-level = 1
+
 [profile.release]
 codegen-units = 1
 
