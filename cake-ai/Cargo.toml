@@ -1,0 +1,11 @@
+[package]
+name = "cake-ai"
+edition.workspace = true
+version.workspace = true
+description = "Scripted bots that play through ordinary commands"
+
+[dependencies]
+cake-core.workspace = true
+
+[lints]
+workspace = true

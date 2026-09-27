@@ -1,0 +1,48 @@
+[workspace]
+resolver = "3"
+members = ["cake-core", "cake-net", "cake-ai", "cake-bevy"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+
+[workspace.dependencies]
+cake-core = { path = "cake-core" }
+cake-net = { path = "cake-net" }
+cake-ai = { path = "cake-ai" }
+
+bevy = "0.19"
+# The fork chinese-checke.rs and omdurman use: the crates.io release does not
+# yet support Bevy 0.19.
+bevy_matchbox = { git = "https://github.com/barafael/matchbox.git" }
+postcard = { version = "1", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+
+# The WebRTC dependency tree pushes debug builds past MSVC's PDB limit
+# (LNK1140). Line tables keep file:line in panics and backtraces, which is what
+# is used day to day.
+[profile.dev]
+debug = "line-tables-only"
+
+# Bevy is unusably slow unoptimised, and so is the simulation at a few hundred
+# units; the rest of the game's crates stay debuggable.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.cake-core]
+opt-level = 2
+
+[profile.dev.package.cake-ai]
+opt-level = 2
+
+[profile.release]
+codegen-units = 1
+
+# Web builds. Trunk runs wasm-opt on top of this.
+[profile.wasm-release]
+inherits = "release"
+opt-level = 2
+strip = "debuginfo"
+
+[workspace.lints.clippy]
+all = "warn"

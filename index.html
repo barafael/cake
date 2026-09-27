@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<!-- Trunk entry point for the web build: `trunk serve` or `trunk build`. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0f1014" />
+  <title>cake</title>
+  <style>
+    html, body {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      background: #0f1014;
+      overflow: hidden;
+      touch-action: none;
+      user-select: none;
+    }
+    /* Fill the viewport exactly; fixed positioning avoids scrollbars. */
+    canvas {
+      display: block;
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      outline: none;
+      touch-action: none;
+    }
+    #boot {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      color: #8a8a95;
+      font: 15px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+  </style>
+</head>
+<body>
+  <div id="boot">Loading the ring&hellip;</div>
+
+  <link data-trunk rel="rust" href="cake-bevy/Cargo.toml" data-bin="cake"
+        data-cargo-profile="wasm-release" data-wasm-opt="2" />
+
+  <script>
+    // Bevy takes over the page once it spawns a canvas; drop the boot notice.
+    new MutationObserver(function () {
+      var c = document.querySelector('canvas');
+      if (!c) return;
+      var boot = document.getElementById('boot');
+      if (boot) boot.remove();
+    }).observe(document.body, { childList: true, subtree: true });
+    // Right-click issues orders.
+    document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  </script>
+</body>
+</html>

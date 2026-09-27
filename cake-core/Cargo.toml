@@ -1,0 +1,12 @@
+[package]
+name = "cake-core"
+edition.workspace = true
+version.workspace = true
+description = "Engine-free, deterministic simulation of the ring"
+
+[dependencies]
+postcard.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

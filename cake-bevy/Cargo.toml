@@ -1,0 +1,30 @@
+[package]
+name = "cake-bevy"
+edition.workspace = true
+version.workspace = true
+description = "Bevy front-end: lobby, rendering, input"
+
+[[bin]]
+name = "cake"
+path = "src/main.rs"
+
+[dependencies]
+bevy.workspace = true
+bevy_matchbox.workspace = true
+cake-ai.workspace = true
+cake-core.workspace = true
+cake-net.workspace = true
+
+# The live multiplayer test hosts an in-process signaling server. The fork
+# re-versions matchbox_signaling without changing its source, so the published
+# 0.14 crate speaks the same protocol. Test-only.
+[dev-dependencies]
+matchbox_signaling = "0.14"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+web-sys = { version = "0.3", features = ["Location", "Window", "EventTarget"] }
+js-sys = "0.3"
+
+[lints]
+workspace = true

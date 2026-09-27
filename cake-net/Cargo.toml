@@ -1,0 +1,15 @@
+[package]
+name = "cake-net"
+edition.workspace = true
+version.workspace = true
+description = "Wire protocol and host-sequenced lockstep for networked play"
+
+[dependencies]
+bevy.workspace = true
+bevy_matchbox.workspace = true
+cake-core.workspace = true
+postcard.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

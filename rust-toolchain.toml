@@ -1,0 +1,8 @@
+# Pin the workspace to stable.
+#
+# The machine default here is a nightly, and on current nightlies bevy_render
+# 0.19 fails to compile (an inherent-method ambiguity inside the dependency,
+# found in chinese-checke.rs), which would present as "cake is broken".
+[toolchain]
+channel = "stable"
+targets = ["wasm32-unknown-unknown"]
