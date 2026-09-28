@@ -1,17 +1,24 @@
-//! Three cameras, drawn in this order into one shared texture.
+//! Four cameras, drawn in this order into one shared texture.
 //!
-//! The **backdrop** camera is fixed: the circle's dark disk and the nebula.
+//! The **backdrop** camera is fixed: the circle's dark disk, which fills the
+//! round viewport whatever the view does.
+//!
+//! The **cake** camera draws what belongs to the circle besides the map: the
+//! nebula, and the players' names on the ring beyond the map. It zooms and
+//! pans with the map but does not turn: the names follow the view's rotation
+//! by their own layout (see [`crate::arctext`]), and the sky stays upright.
 //!
 //! The **main** camera looks at the map: the whole ring fits the window, the
 //! view is turned so my HQ sits at the bottom with my neighbours to the left
 //! and right, and it zooms and pans.
 //!
-//! The **overlay** camera is fixed too, and draws on top: the ring beyond the
-//! map, the window chrome, players' names and the UI.
+//! The **overlay** camera is fixed too, and draws on top: the mask outside the
+//! circle, the window chrome and the UI.
 //!
 //! The fixed cameras measure in "circle units": the circle (radius 600)
-//! always fits the window. At zoom 1 the map camera agrees, so the map's ring
-//! sits exactly inside the frame.
+//! always fits the window. At zoom 1 the cake and map cameras agree, so the
+//! map, its names and its sky sit exactly inside the frame; zoomed, they grow
+//! together behind the round viewport.
 //!
 //! When the app opens, everything grows out of the centre: see [`Opening`].
 
@@ -33,6 +40,8 @@ const FRAME: f32 = 2.0 * RADIUS;
 pub const OVERLAY_LAYER: usize = 1;
 /// The render layer of the circle's backdrop.
 pub const BACKDROP_LAYER: usize = 2;
+/// The render layer of what zooms with the map but is not drawn by it.
+pub const CAKE_LAYER: usize = 3;
 const OPENING_SECS: f32 = 1.0;
 
 /// The opening animation: the circle and all it holds grow from a point in
@@ -65,8 +74,8 @@ const MAX_ZOOM: f32 = 1.5;
 /// Keyboard pan speed, in screen-heights per second.
 const PAN_SPEED: f32 = 0.8;
 
-/// Where the camera looks: pan (world units), zoom (scale; 1 fits the ring)
-/// and rotation (radians).
+/// Where the map camera looks, and the cake camera with it: pan (world
+/// units), zoom (scale; 1 fits the ring) and rotation (radians).
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct Rig {
     pub pan: Vec2,
@@ -86,6 +95,9 @@ impl Default for Rig {
 
 #[derive(Component)]
 pub struct MainCamera;
+
+#[derive(Component)]
+pub struct CakeCamera;
 
 #[derive(Component)]
 pub struct OverlayCamera;
@@ -119,6 +131,12 @@ pub fn plugin(app: &mut App) {
         );
 }
 
+/// Screen pixels per circle unit at the fitted view, where the circle fills
+/// the window's shorter side.
+pub fn px_per_unit(window: &Window) -> f32 {
+    window.width().min(window.height()).max(1.0) / FRAME
+}
+
 fn fitted() -> Projection {
     Projection::Orthographic(OrthographicProjection {
         scaling_mode: ScalingMode::AutoMin {
@@ -139,20 +157,32 @@ pub fn backdrop_clear(mode: DisplayMode) -> ClearColorConfig {
 }
 
 fn spawn(mut commands: Commands, settings: Res<Settings>) {
-    // All three render into the window's shared intermediate texture, and
+    // All four render into the window's shared intermediate texture, and
     // only the overlay copies it to the window, replacing what is there. That
     // keeps the transparent pixels that make cake mode's corners
     // see-through.
     commands.spawn((
         Camera2d,
         Camera {
-            order: -1,
+            order: -2,
             clear_color: backdrop_clear(settings.mode),
             output_mode: CameraOutputMode::Skip,
             ..default()
         },
         BackdropCamera,
         RenderLayers::layer(BACKDROP_LAYER),
+        fitted(),
+    ));
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: -1,
+            clear_color: ClearColorConfig::None,
+            output_mode: CameraOutputMode::Skip,
+            ..default()
+        },
+        CakeCamera,
+        RenderLayers::layer(CAKE_LAYER),
         fitted(),
     ));
     commands.spawn((
@@ -211,7 +241,7 @@ fn controls(
     window: Single<&Window, With<PrimaryWindow>>,
     mut rig: ResMut<Rig>,
 ) {
-    let units_per_px = FRAME * rig.zoom / window.height().min(window.width()).max(1.0);
+    let units_per_px = rig.zoom / px_per_unit(&window);
     let rot = Mat2::from_angle(rig.rotation);
 
     // Wheel: zoom about the point under the cursor.
@@ -269,17 +299,26 @@ fn open(time: Res<Time>, mut opening: ResMut<Opening>) {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn apply(
     rig: Res<Rig>,
     opening: Res<Opening>,
     mut main: Query<(&mut Transform, &mut Projection), With<MainCamera>>,
+    mut cake: Query<(&mut Transform, &mut Projection), (With<CakeCamera>, Without<MainCamera>)>,
     // The overlay and the backdrop: every other camera is fixed.
-    mut fixed: Query<&mut Projection, (With<Camera>, Without<MainCamera>)>,
+    mut fixed: Query<&mut Projection, (With<Camera>, Without<MainCamera>, Without<CakeCamera>)>,
 ) {
     let grow = opening.scale();
     if let Ok((mut tf, mut projection)) = main.single_mut() {
         tf.translation = rig.pan.extend(tf.translation.z);
         tf.rotation = Quat::from_rotation_z(rig.rotation);
+        set_scale(&mut projection, rig.zoom / grow);
+    }
+    if let Ok((mut tf, mut projection)) = cake.single_mut() {
+        // The map camera's view without its turn: the pan as the screen sees
+        // it.
+        let pan = Mat2::from_angle(-rig.rotation) * rig.pan;
+        tf.translation = pan.extend(tf.translation.z);
         set_scale(&mut projection, rig.zoom / grow);
     }
     for mut projection in &mut fixed {

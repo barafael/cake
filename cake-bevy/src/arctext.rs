@@ -1,24 +1,29 @@
 //! Text that runs along a circular arc, centred on an angle of the ring.
 //!
-//! Each character is its own `Text2d` on the overlay layer, placed along the
-//! arc and turned to follow it. The arc's radius is in circle units, fixed to
-//! the window. Its angle is either on the map ([`Frame::Map`]: it follows the
-//! view's rotation, so a name stays beside its sector) or on the screen
-//! ([`Frame::Screen`]: it stays put).
+//! Each character is its own `Text2d`, placed along the arc and turned to
+//! follow it. The arc's radius is in circle units. A label is either on the
+//! circle ([`Frame::Map`]: its angle is on the map, so a name stays beside its
+//! sector, and it zooms and pans with the map) or on the screen
+//! ([`Frame::Screen`]: it stays put, like the rest of the UI).
 //!
-//! On the upper half of the screen the text reads left to right with its tops
-//! toward the rim; on the lower half it flips, so it reads left to right there
-//! too instead of upside down.
+//! On the upper half of the fitted view the text reads left to right with its
+//! tops toward the rim; on the lower half it flips, so it reads left to right
+//! there too instead of upside down.
 //!
 //! Labels step aside, along their arc, for [`ReservedArcs`]: parts of the
-//! ring something else occupies, like the window buttons.
+//! ring something else occupies at the fitted view, like the window buttons.
+//!
+//! Text is rasterised at its font size whatever the zoom, so a label zoomed in
+//! would blur: its glyphs are rasterised larger and scaled back down, by a
+//! power of two that follows how many pixels a circle unit covers.
 
 use std::f32::consts::FRAC_PI_2;
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 
-use crate::camera::{OVERLAY_LAYER, Rig};
+use crate::camera::{CAKE_LAYER, OVERLAY_LAYER, Rig, px_per_unit};
 use crate::ringmesh::wrap_pi;
 
 /// Where players' names run: on the ring beyond the map.
@@ -29,19 +34,33 @@ pub const NAME_SIZE: f32 = 16.0;
 const ADVANCE: f32 = 0.6;
 /// Clearance between a label and a reserved arc, in radians.
 const MARGIN: f32 = 0.026;
+/// The largest factor glyphs are rasterised at: at the closest zoom a label
+/// is still sharp, and the font atlas holds a few sizes per label at most.
+const MAX_RASTER: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Frame {
-    /// The angle is on the map, and turns with the view.
+    /// On the circle: the angle is on the map, and the label turns with the
+    /// view, and zooms and pans with it.
     #[default]
     Map,
-    /// The angle is on the screen.
+    /// On the screen: the angle is the screen's, and the label stays put.
     Screen,
 }
 
+impl Frame {
+    fn layer(self) -> RenderLayers {
+        RenderLayers::layer(match self {
+            Frame::Map => CAKE_LAYER,
+            Frame::Screen => OVERLAY_LAYER,
+        })
+    }
+}
+
 /// A line of text laid along an arc. Its glyphs are children of this entity,
-/// respawned when the text or size changes; angle, radius and colour just
-/// move and tint them, so a label can slide and fade every frame.
+/// respawned when the text, size or frame changes, or the zoom wants them
+/// rasterised at another scale; angle, radius and colour just move and tint
+/// them, so a label can slide and fade every frame.
 #[derive(Component, Clone, Debug, PartialEq)]
 #[require(Transform, Visibility)]
 pub struct ArcText {
@@ -95,6 +114,9 @@ struct Glyph(usize);
 struct Built {
     text: String,
     size: f32,
+    frame: Frame,
+    /// The glyphs are rasterised at this many times `size`, and scaled back.
+    raster: f32,
 }
 
 pub fn plugin(app: &mut App) {
@@ -102,19 +124,41 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, (rebuild, place).chain());
 }
 
-/// Respawn the glyphs of every label whose text or size changed.
+/// How many times its size to rasterise text at, when one of its circle
+/// units covers `px` pixels: the nearest power of two, from 1 to
+/// [`MAX_RASTER`], so zooming re-rasterises only now and then.
+fn raster(px: f32) -> f32 {
+    px.max(1.0).log2().round().exp2().min(MAX_RASTER)
+}
+
+/// Respawn the glyphs of every label whose text, size or frame changed, or
+/// whose glyphs are due to be rasterised at another scale.
 #[allow(clippy::type_complexity)]
 fn rebuild(
     mut commands: Commands,
-    labels: Query<(Entity, &ArcText, Option<&Built>, Option<&Children>), Changed<ArcText>>,
+    rig: Res<Rig>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    labels: Query<(Entity, &ArcText, Option<&Built>, Option<&Children>)>,
 ) {
+    let px = window.map_or(1.0, |w| px_per_unit(&w));
     for (entity, label, built, children) in &labels {
-        if built.is_some_and(|b| b.text == label.text && b.size == label.size) {
+        let raster = raster(match label.frame {
+            Frame::Map => px / rig.zoom,
+            Frame::Screen => px,
+        });
+        if built.is_some_and(|b| {
+            b.text == label.text
+                && b.size == label.size
+                && b.frame == label.frame
+                && b.raster == raster
+        }) {
             continue;
         }
         commands.entity(entity).insert(Built {
             text: label.text.clone(),
             size: label.size,
+            frame: label.frame,
+            raster,
         });
         if let Some(children) = children {
             for c in children.iter() {
@@ -128,12 +172,12 @@ fn rebuild(
             commands.spawn((
                 Text2d::new(ch.to_string()),
                 TextFont {
-                    font_size: bevy::text::FontSize::Px(label.size),
+                    font_size: bevy::text::FontSize::Px(label.size * raster),
                     ..default()
                 },
                 TextColor(label.color),
                 Glyph(i),
-                RenderLayers::layer(OVERLAY_LAYER),
+                label.frame.layer(),
                 ChildOf(entity),
             ));
         }
@@ -179,13 +223,15 @@ pub fn glyph_transform(i: usize, n: usize, angle: f32, radius: f32, size: f32) -
     (Vec2::from_angle(a) * radius, turn)
 }
 
+/// Lay each label's glyphs along its arc. A label on the circle is laid out
+/// as the fitted view shows it; the cake camera takes it from there.
 fn place(
     rig: Res<Rig>,
     reserved: Res<ReservedArcs>,
-    labels: Query<(&ArcText, &Children)>,
+    labels: Query<(&ArcText, &Built, &Children)>,
     mut glyphs: Query<(&Glyph, &mut Transform, &mut TextColor)>,
 ) {
-    for (label, children) in &labels {
+    for (label, built, children) in &labels {
         let n = label.text.chars().count();
         let on_screen = match label.frame {
             Frame::Map => label.angle - rig.rotation,
@@ -200,7 +246,8 @@ fn place(
             let (at, turn) = glyph_transform(glyph.0, n, angle, label.radius, label.size);
             tf.set_if_neq(
                 Transform::from_translation(at.extend(1.0))
-                    .with_rotation(Quat::from_rotation_z(turn)),
+                    .with_rotation(Quat::from_rotation_z(turn))
+                    .with_scale(Vec3::splat(built.raster.recip())),
             );
         }
     }
@@ -231,6 +278,16 @@ mod tests {
         assert!(first.x < last.x, "{first} {last}");
         let (_, turn) = glyph_transform(2, 5, -FRAC_PI_2, 380.0, 15.0);
         assert!(wrap_pi(turn).abs() < 1e-5);
+    }
+
+    #[test]
+    fn text_is_rasterised_at_the_nearest_power_of_two_up_to_the_cap() {
+        assert_eq!(raster(0.3), 1.0, "shrunk text is never rasterised smaller");
+        assert_eq!(raster(1.3), 1.0);
+        assert_eq!(raster(1.5), 2.0);
+        assert_eq!(raster(4.6), 4.0);
+        assert_eq!(raster(6.0), 8.0);
+        assert_eq!(raster(100.0), MAX_RASTER);
     }
 
     #[test]

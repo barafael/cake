@@ -3,8 +3,9 @@
 //! The UI is laid out on a box the size of the circle, centred in the window,
 //! in circle units (the chrome scales [`UiScale`] so one UI pixel is one
 //! unit). The map's band runs from radius 400 to 500, so the lobby and the
-//! match HUD fill the inner disk, inside radius ~390. Players' names run along
-//! the ring beyond the map, each in their own sector, as [`ArcText`]; the
+//! match HUD fill the inner disk, inside radius ~390, and stay put while the
+//! map zooms. Players' names run along the ring beyond the map, each in their
+//! own sector, as [`ArcText`] on the circle, so they zoom with the map; the
 //! selected unit's menu is in [`crate::menu`].
 
 use bevy::ecs::system::EntityCommands;

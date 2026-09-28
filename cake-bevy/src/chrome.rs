@@ -1,9 +1,10 @@
 //! Cake mode's window chrome.
 //!
 //! In cake mode ([`DisplayMode::Cake`]) the OS window is frameless and
-//! transparent, and only a disk of radius [`RADIUS`] shows. The ring between [`PLAY_RADIUS`]
-//! and [`RADIUS`] continues the nebula (see [`crate::nebula`]) and is the
-//! window frame:
+//! transparent, and only a disk of radius [`RADIUS`] shows. The ring between
+//! [`PLAY_RADIUS`] and [`RADIUS`] is the window frame. At the fitted view it
+//! holds the players' names over the rim of the nebula; zoomed in, the map
+//! shows through it, but the pointer there is still the frame's:
 //!
 //! - drag it to move the window;
 //! - drag its outermost band to resize, in the direction of the edge grabbed;
@@ -13,11 +14,13 @@
 //!
 //! Everything here is drawn on the overlay layer, whose camera is fixed: one
 //! unit is one "circle unit", and the circle is always 1200 across however
-//! the map is zoomed. Outside the circle a [`Punch`] mesh writes fully
-//! transparent pixels, clearing whatever the map drew there.
+//! the map is zoomed.
 //!
-//! In window mode ([`DisplayMode::Window`], and always on the web) the
-//! buttons and the mask are hidden, and the OS draws the usual decorations.
+//! The viewport is round in either mode: outside the circle a mask covers
+//! whatever the cake and the map drew there. In cake mode it is a [`Punch`],
+//! which writes fully transparent pixels; in window mode ([`DisplayMode::Window`],
+//! and always on the web) it is the background colour, the frame's buttons
+//! are hidden, and the OS draws the usual decorations.
 //!
 //! This module also owns the pointer's arbitration: [`PointerSet`] decides
 //! where the pointer is and whether the map may have it ([`PointerBlocked`]),
@@ -36,7 +39,7 @@ use bevy::sprite_render::{
 use bevy::window::{CursorEntered, PrimaryWindow, WindowLevel};
 
 use crate::arctext::{Reserved, ReservedArcs};
-use crate::camera::{BackdropCamera, Cursor, OVERLAY_LAYER, Opening, backdrop_clear};
+use crate::camera::{BackdropCamera, Cursor, OVERLAY_LAYER, Opening, backdrop_clear, px_per_unit};
 use crate::palette;
 use crate::ringmesh::{self, Slots};
 use crate::settings::{self, DisplayMode, Settings};
@@ -86,9 +89,10 @@ impl Material2d for Punch {
     }
 }
 
-/// Shown in cake mode only: the outside mask and the button sections.
+/// Shown in one display mode only: the masks outside the circle, and the
+/// button sections.
 #[derive(Component)]
-struct ChromePiece;
+struct ShownIn(DisplayMode);
 
 /// A button's section, whose fill shows hover and state.
 #[derive(Component)]
@@ -183,8 +187,8 @@ fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
     lines.line.width = 1.0;
 }
 
-fn visibility(settings: &Settings) -> Visibility {
-    if settings.mode == DisplayMode::Cake {
+fn visibility(shown: DisplayMode, settings: &Settings) -> Visibility {
+    if settings.mode == shown {
         Visibility::Inherited
     } else {
         Visibility::Hidden
@@ -201,15 +205,35 @@ fn spawn(
 ) {
     flags.can_pin = settings::pin_supported();
     let layer = RenderLayers::layer(OVERLAY_LAYER);
-    // Everything the map drew outside the circle becomes see-through. Far
-    // enough out to cover the window while the opening shrinks the circle.
+    // Everything drawn outside the circle is masked: see-through in cake
+    // mode, the background in window mode. Far enough out to cover the
+    // window while the opening shrinks the circle.
+    let outside = meshes.add(ringmesh::ring(RADIUS, 200_000.0, RADIUS));
     commands.spawn((
-        Mesh2d(meshes.add(ringmesh::ring(RADIUS, 200_000.0, RADIUS))),
+        Mesh2d(outside.clone()),
         MeshMaterial2d(punches.add(Punch {})),
         Transform::from_xyz(0.0, 0.0, -10.0),
         layer.clone(),
-        ChromePiece,
-        visibility(&settings),
+        ShownIn(DisplayMode::Cake),
+        visibility(DisplayMode::Cake, &settings),
+    ));
+    commands.spawn((
+        Mesh2d(outside),
+        MeshMaterial2d(materials.add(ColorMaterial::from_color(palette::BACKGROUND))),
+        Transform::from_xyz(0.0, 0.0, -10.0),
+        layer.clone(),
+        ShownIn(DisplayMode::Window),
+        visibility(DisplayMode::Window, &settings),
+    ));
+    // In a window, the circle's edge would vanish wherever the view shows
+    // past the cake's rim: the backdrop there is the window's colour.
+    commands.spawn((
+        Mesh2d(meshes.add(ringmesh::ring(RADIUS - 1.5, RADIUS, RADIUS))),
+        MeshMaterial2d(materials.add(ColorMaterial::from_color(palette::FAINT))),
+        Transform::from_xyz(0.0, 0.0, -9.0),
+        layer.clone(),
+        ShownIn(DisplayMode::Window),
+        visibility(DisplayMode::Window, &settings),
     ));
     let n = ChromeButton::ALL.len();
     for b in ChromeButton::ALL {
@@ -220,8 +244,8 @@ fn spawn(
             Transform::from_xyz(0.0, 0.0, -5.0),
             layer.clone(),
             Segment(b),
-            ChromePiece,
-            visibility(&settings),
+            ShownIn(DisplayMode::Cake),
+            visibility(DisplayMode::Cake, &settings),
         ));
     }
 }
@@ -233,7 +257,7 @@ fn scale_ui(
     opening: Res<Opening>,
     mut scale: ResMut<UiScale>,
 ) {
-    let s = window.width().min(window.height()).max(1.0) / (2.0 * RADIUS) * opening.scale();
+    let s = px_per_unit(&window) * opening.scale();
     if scale.0 != s {
         scale.0 = s;
     }
@@ -248,10 +272,14 @@ pub fn block_pointer(
     mut blocked: ResMut<PointerBlocked>,
 ) {
     let over_ui = interactions.iter().any(|i| *i != Interaction::None);
-    let on_frame =
-        settings.mode == DisplayMode::Cake && cursor.ui.is_some_and(|p| p.length() > PLAY_RADIUS);
+    // The frame in cake mode, and outside the circle in either: whatever of
+    // the map shows there when zoomed in is not for clicking.
+    let off_map = cursor.ui.is_some_and(|p| {
+        let r = p.length();
+        r > RADIUS || (settings.mode == DisplayMode::Cake && r > PLAY_RADIUS)
+    });
     blocked.set_if_neq(PointerBlocked(
-        over_ui || claimed.0 || on_frame || !opening.done(),
+        over_ui || claimed.0 || off_map || !opening.done(),
     ));
     claimed.set_if_neq(PointerClaimed(false));
 }
@@ -516,7 +544,7 @@ fn draw(
 fn apply_style(
     settings: Res<Settings>,
     mut window: Single<&mut Window, With<PrimaryWindow>>,
-    mut pieces: Query<&mut Visibility, With<ChromePiece>>,
+    mut pieces: Query<(&ShownIn, &mut Visibility)>,
     mut backdrop: Query<&mut Camera, With<BackdropCamera>>,
     mut reserved: ResMut<ReservedArcs>,
 ) {
@@ -534,8 +562,8 @@ fn apply_style(
             window.resolution.set(side, side);
         }
     }
-    for mut v in &mut pieces {
-        v.set_if_neq(visibility(&settings));
+    for (shown, mut v) in &mut pieces {
+        v.set_if_neq(visibility(shown.0, &settings));
     }
     for mut camera in &mut backdrop {
         camera.clear_color = backdrop_clear(settings.mode);

@@ -9,22 +9,22 @@
 //! The seed comes from the room name, so everyone in a room shares one sky,
 //! as btl's server hands every client the same seed.
 //!
-//! The nebula fills the whole circle and stays put while the map zooms: a
-//! dark disk with the nebula over it on the backdrop layer, and the same
-//! texture again on the ring beyond the map (overlay layer), mapped so the two
-//! meet without a seam. The ring copy also hides the map where it would
-//! spill past its edge when zoomed in.
+//! The nebula belongs to the circle, as the map does: at the fitted view it
+//! fills the whole circle, and it zooms and pans with the map (it is drawn
+//! by the cake camera, see [`crate::camera`]). Behind it, a dark disk on the
+//! backdrop layer stays put and fills the round viewport, so zoomed out, the
+//! nebula's edge shows against it.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::sprite_render::{AlphaMode2d, ColorMaterial, MeshMaterial2d};
+use bevy::sprite_render::{ColorMaterial, MeshMaterial2d};
 use cake_net::RoomId;
 
-use crate::camera::{BACKDROP_LAYER, OVERLAY_LAYER};
-use crate::chrome::{PLAY_RADIUS, RADIUS};
-use crate::{palette, ringmesh};
+use crate::camera::{BACKDROP_LAYER, CAKE_LAYER};
+use crate::chrome::RADIUS;
+use crate::palette;
 
 /// Texture resolution. It is stretched over the whole circle, and a nebula
 /// is soft anyway, so low resolution is fine (and cheap to re-render).
@@ -71,14 +71,14 @@ fn spawn(
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     ));
-    // The backdrop: the dark disk, and the nebula over it.
-    let backdrop = RenderLayers::layer(BACKDROP_LAYER);
+    // The viewport's dark disk, fixed to the window.
     commands.spawn((
         Mesh2d(meshes.add(Circle::new(RADIUS).mesh().resolution(256))),
         MeshMaterial2d(materials.add(ColorMaterial::from_color(palette::BACKGROUND))),
         Transform::from_xyz(0.0, 0.0, -20.0),
-        backdrop.clone(),
+        RenderLayers::layer(BACKDROP_LAYER),
     ));
+    // The nebula, on the circle.
     commands.spawn((
         Sprite {
             image: image.clone(),
@@ -87,27 +87,7 @@ fn spawn(
             ..default()
         },
         Transform::from_xyz(0.0, 0.0, -10.0),
-        backdrop,
-    ));
-    // The same again on the ring beyond the map, over whatever the map drew.
-    let overlay = RenderLayers::layer(OVERLAY_LAYER);
-    let ring = meshes.add(ringmesh::ring(PLAY_RADIUS, RADIUS, RADIUS));
-    commands.spawn((
-        Mesh2d(ring.clone()),
-        MeshMaterial2d(materials.add(ColorMaterial::from_color(palette::BACKGROUND))),
-        Transform::from_xyz(0.0, 0.0, -30.0),
-        overlay.clone(),
-    ));
-    commands.spawn((
-        Mesh2d(ring),
-        MeshMaterial2d(materials.add(ColorMaterial {
-            color: TINT,
-            alpha_mode: AlphaMode2d::Blend,
-            texture: Some(image.clone()),
-            ..default()
-        })),
-        Transform::from_xyz(0.0, 0.0, -29.0),
-        overlay,
+        RenderLayers::layer(CAKE_LAYER),
     ));
     commands.insert_resource(Nebula {
         programs,
@@ -116,9 +96,8 @@ fn spawn(
     });
 }
 
-/// Re-render the texture as `t` moves. Both the backdrop sprite and the ring
-/// material sample the same image, which is rewritten in place on the GPU,
-/// so both follow it.
+/// Re-render the texture as `t` moves. The image is rewritten in place on
+/// the GPU, so the sprite follows it.
 fn waver(time: Res<Time>, mut nebula: ResMut<Nebula>, mut images: ResMut<Assets<Image>>) {
     let now = time.elapsed_secs();
     if now - nebula.rendered_at < RENDER_INTERVAL_SECS {
@@ -136,7 +115,7 @@ fn waver(time: Res<Time>, mut nebula: ResMut<Nebula>, mut images: ResMut<Assets<
 }
 
 /// The RGBA texture at time `t`: opaque over the circle, clear in the
-/// corners outside it (which window mode shows).
+/// corners outside it (which show when the view is zoomed out).
 fn render(programs: &Programs, t: f32) -> Vec<u8> {
     let mut pixels = vec![0u8; (SIZE * SIZE * 4) as usize];
     // One texel of soft edge.

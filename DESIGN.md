@@ -242,6 +242,13 @@ closes.
 When the game opens, the circle and everything in it grows out of the centre
 to full size over one second, easing out.
 
+The circle is a round window onto the game, in either mode. At first the
+map, the nebula behind it and the players' names fill it exactly. Zooming
+and panning take all three along together, like looking closer at the
+cake, while the window's controls, the readouts in the middle and the menus
+stay where they are. Whatever would show past the circle's edge is masked,
+so the view stays round however far it zooms.
+
 ### Effects
 
 The map is still all lines, but fighting is lit up. Nothing here is
@@ -297,8 +304,9 @@ watches the simulation from outside and is not part of the checksum.
 
 On desktop the game runs in **cake mode**: it *is* the circle, a
 frameless, transparent window of which only a disk shows. Its outer ring
-(radius 512 to 600 of 600) simply continues the nebula, and is the window
-chrome:
+(radius 512 to 600 of 600) is the window chrome. At the fitted view it holds
+the players' names over the rim of the nebula; zoomed in, the map shows
+through it, but the pointer there is still the chrome's:
 
 - drag the ring to move the window;
 - drag its outermost band to resize, in the direction of the edge grabbed;
@@ -343,10 +351,17 @@ evaluated per pixel over `(x, y, t)`. `t` follows a one-minute sine, so the
 field slowly wavers back and forth. The seed is the room name, so everyone
 in a room sees the same sky.
 
-It fills the whole circle and stays put while the map zooms: a backdrop
-camera draws a dark disk and the nebula behind the map, and the overlay draws
-the same texture again on the ring beyond the map, mapped so the two meet
-without a seam.
+It belongs to the circle: at the fitted view it fills it, and it zooms and
+pans with the map. A cake camera draws it, and the players' names, behind
+the map; it follows the map camera's pan and zoom but not its turn, so the
+sky stays upright. Behind that, a fixed backdrop draws a dark disk that
+fills the round viewport, which shows around the nebula when the view is
+zoomed out.
+
+Text is rasterised at its font size whatever the camera does, so the names
+are rasterised at a power of two times their size that follows the zoom,
+and scaled back down: sharp up close, and only a few sizes in the font
+atlas.
 
 ## Architecture
 
