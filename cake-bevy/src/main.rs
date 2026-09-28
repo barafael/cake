@@ -1,27 +1,27 @@
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
-use cake_bevy::settings::{self, Settings, WindowStyle};
+use cake_bevy::settings::{self, Settings, DisplayMode};
 use cake_bevy::{logic_plugin, view_plugin, web};
 
 fn main() {
     // Right-click issues orders; keep the browser's menu off it. No-op native.
     web::prevent_context_menu();
     let settings = Settings::load();
-    let circle = settings.window == WindowStyle::Circle;
+    let cake = settings.mode == DisplayMode::Cake;
     let window = Window {
         title: "cake".into(),
-        // The circle is the whole window: square, and small enough for a
-        // laptop screen. A normal window gets room for the HUD's width.
-        resolution: if circle {
+        // In cake mode the circle is the whole window: square, and small
+        // enough for a laptop screen. Window mode gets room to spare.
+        resolution: if cake {
             WindowResolution::new(820, 820)
         } else {
             WindowResolution::new(1100, 900)
         },
-        decorations: !circle,
+        decorations: !cake,
         // Transparency is decided when the window is created, so native
         // windows always ask for it; an opaque background then looks normal
-        // and the style can change at runtime.
-        transparent: settings::circle_supported(),
+        // and the mode can change at runtime.
+        transparent: settings::cake_supported(),
         composite_alpha_mode: settings::composite_alpha_mode(),
         fit_canvas_to_parent: true,
         ..default()

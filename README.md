@@ -13,10 +13,12 @@ CAKE_BOTS=5 cargo run -p cake-bevy           # skip the lobby: you and 5 bots
 CAKE_BOTS=6 CAKE_WATCH=1 cargo run -p cake-bevy  # watch 6 bots play
 ```
 
-On desktop the window is a frameless circle: drag its outer ring to move
-it, drag the ring's outermost edge to resize, and use the buttons on top to
-close, maximise, minimise, pin, or switch to a normal window (saved in
-`~/.config/cake/settings`; `CAKE_WINDOW=windowed` overrides it for a run).
+On desktop the game runs in **cake mode**: the window is a frameless circle.
+Drag its outer ring to move it, drag the ring's outermost edge to resize,
+and use the sections on top to close, maximise, minimise, pin, or switch to
+**window mode**, an ordinary decorated window. The choice is saved in
+`~/.config/cake/settings`; `CAKE_MODE=window` or `CAKE_MODE=cake` overrides
+it for a run.
 
 Everyone who opens the same room meets in its lobby. The peer with the
 smallest id hosts: it adds bots (`B`/`X`) and starts the match (`Enter`).

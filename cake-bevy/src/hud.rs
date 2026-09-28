@@ -19,7 +19,7 @@ use crate::arctext::ArcText;
 use crate::chrome::RADIUS;
 use crate::input::{Mode, Selection};
 use crate::lobby::{Lobby, LobbyAction, LobbyInput, display_name, my_key};
-use crate::settings::{self, Settings, WindowStyle};
+use crate::settings::{self, Settings};
 use crate::{AppState, Match, palette};
 
 pub fn plugin(app: &mut App) {
@@ -86,6 +86,13 @@ fn font(size: f32) -> TextFont {
         font_size: FontSize::Px(size),
         ..default()
     }
+}
+
+fn capitalised(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|first| first.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
 }
 
 fn centered() -> TextLayout {
@@ -208,7 +215,7 @@ fn press_buttons(
         }
         match *action {
             UiAction::Lobby(a) => input.0.push(a),
-            UiAction::ToggleWindow => settings.window = settings.window.toggled(),
+            UiAction::ToggleWindow => settings.mode = settings.mode.toggled(),
             UiAction::BackToLobby => next.set(AppState::Lobby),
         }
     }
@@ -266,7 +273,7 @@ fn spawn_lobby(mut commands: Commands) {
         let x = -189.0 + 126.0 * i as f32;
         button(c, b, place(x, -125.0, 118.0, 42.0), label, UiAction::Lobby(action));
     }
-    if settings::circle_supported() {
+    if settings::cake_supported() {
         let node = place(0.0, -185.0, 400.0, 36.0);
         let (_, label) = button(c, b, node, "", UiAction::ToggleWindow);
         c.entity(label).insert(StyleLabel);
@@ -323,11 +330,9 @@ fn update_lobby(
         texts.p1().0.clone_from(&lobby.status);
     }
     if let Some(mut label) = texts.p3() {
-        let text = match settings.window {
-            WindowStyle::Circle => "Window: circle  (use a normal window)",
-            WindowStyle::Windowed => "Window: normal  (use the circle)",
-        };
-        label.set_if_neq(Text(text.into()));
+        let now = settings.mode;
+        let text = format!("{}  (switch to {})", capitalised(now.name()), now.toggled().name());
+        label.set_if_neq(Text(text));
     }
 
     // Players are shown on the ring (see `lobby_ring`); watchers are listed

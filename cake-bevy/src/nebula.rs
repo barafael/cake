@@ -136,7 +136,7 @@ fn waver(time: Res<Time>, mut nebula: ResMut<Nebula>, mut images: ResMut<Assets<
 }
 
 /// The RGBA texture at time `t`: opaque over the circle, clear in the
-/// corners outside it (which a normal window shows).
+/// corners outside it (which window mode shows).
 fn render(programs: &Programs, t: f32) -> Vec<u8> {
     let mut pixels = vec![0u8; (SIZE * SIZE * 4) as usize];
     // One texel of soft edge.

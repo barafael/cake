@@ -1,22 +1,23 @@
-//! The circle window's chrome.
+//! Cake mode's window chrome.
 //!
-//! In [`WindowStyle::Circle`] the OS window is frameless and transparent, and
-//! only a disk of radius [`RADIUS`] shows. The ring between [`PLAY_RADIUS`]
+//! In cake mode ([`DisplayMode::Cake`]) the OS window is frameless and
+//! transparent, and only a disk of radius [`RADIUS`] shows. The ring between [`PLAY_RADIUS`]
 //! and [`RADIUS`] continues the nebula (see [`crate::nebula`]) and is the
 //! window frame:
 //!
 //! - drag it to move the window;
 //! - drag its outermost band to resize, in the direction of the edge grabbed;
-//! - slices of the ring on its top arc, each with an icon, close, maximise,
-//!   minimise, pin always-on-top, and switch to a normal window.
+//! - sections of the ring on its top arc, marked off by thin lines, each
+//!   with an icon, close, maximise, minimise, pin always-on-top, and switch
+//!   to window mode. A section lights up under the pointer.
 //!
 //! Everything here is drawn on the overlay layer, whose camera is fixed: one
 //! unit is one "circle unit", and the circle is always 1200 across however
 //! the map is zoomed. Outside the circle a [`Punch`] mesh writes fully
 //! transparent pixels, clearing whatever the map drew there.
 //!
-//! In [`WindowStyle::Windowed`] (and always on the web) the buttons and the
-//! mask are hidden, and the OS draws the usual decorations.
+//! In window mode ([`DisplayMode::Window`], and always on the web) the
+//! buttons and the mask are hidden, and the OS draws the usual decorations.
 //!
 //! This module also owns the pointer's arbitration: [`PointerSet`] decides
 //! where the pointer is and whether the map may have it ([`PointerBlocked`]),
@@ -37,7 +38,7 @@ use bevy::window::{CursorEntered, PrimaryWindow, WindowLevel};
 use crate::arctext::{Reserved, ReservedArcs};
 use crate::camera::{BackdropCamera, Cursor, OVERLAY_LAYER, Opening, backdrop_clear};
 use crate::ringmesh::{self, Slots};
-use crate::settings::{self, Settings, WindowStyle};
+use crate::settings::{self, Settings, DisplayMode};
 use crate::palette;
 
 /// The whole circle, in circle units.
@@ -47,21 +48,27 @@ pub const RADIUS: f32 = 600.0;
 pub const PLAY_RADIUS: f32 = 512.0;
 /// The outermost band of the frame resizes instead of moving.
 const RESIZE_BAND: f32 = 14.0;
-/// The window buttons: slices of the whole ring across the top, left to
-/// right, with a hairline between.
+/// The window buttons: sections of the whole ring across the top, left to
+/// right, edge to edge.
 const BUTTONS: Slots = Slots {
     inner: PLAY_RADIUS,
     outer: RADIUS,
     centre: 90.0,
     width: 6.0,
-    gap: 0.6,
+    gap: 0.0,
     clockwise: true,
 };
+const DIVIDER: Color = Color::srgba(0.62, 0.64, 0.70, 0.45);
 /// Half the size of a button's icon.
 const SYMBOL: f32 = 12.0;
 
+/// The chrome's icons.
 #[derive(Default, Reflect, GizmoConfigGroup)]
 pub struct ChromeGizmos;
+
+/// The chrome's thin lines: the dividers between buttons.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub struct ChromeLines;
 
 /// A material that punches holes: it writes `(0, 0, 0, 0)` without blending.
 /// `ColorMaterial` can't, because opaque mode forces alpha to 1, which
@@ -79,11 +86,11 @@ impl Material2d for Punch {
     }
 }
 
-/// Shown in circle style only: the outside mask and the button slices.
+/// Shown in cake mode only: the outside mask and the button sections.
 #[derive(Component)]
 struct ChromePiece;
 
-/// A button's slice, whose fill shows hover and state.
+/// A button's section, whose fill shows hover and state.
 #[derive(Component)]
 struct Segment(ChromeButton);
 
@@ -144,6 +151,7 @@ pub fn plugin(app: &mut App) {
     embedded_asset!(app, "punch.wgsl");
     app.add_plugins(Material2dPlugin::<Punch>::default())
         .init_gizmo_group::<ChromeGizmos>()
+        .init_gizmo_group::<ChromeLines>()
         .init_resource::<PointerBlocked>()
         .init_resource::<PointerClaimed>()
         .init_resource::<WindowFlags>()
@@ -154,7 +162,7 @@ pub fn plugin(app: &mut App) {
             Update,
             (
                 scale_ui,
-                (press, draw, shade).run_if(circle_style),
+                (press, draw, shade).run_if(cake_mode),
                 apply_style,
             )
                 .chain()
@@ -162,18 +170,21 @@ pub fn plugin(app: &mut App) {
         );
 }
 
-pub fn circle_style(settings: Res<Settings>) -> bool {
-    settings.window == WindowStyle::Circle
+pub fn cake_mode(settings: Res<Settings>) -> bool {
+    settings.mode == DisplayMode::Cake
 }
 
 fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
-    let (config, _) = store.config_mut::<ChromeGizmos>();
-    config.render_layers = RenderLayers::layer(OVERLAY_LAYER);
-    config.line.width = 3.0;
+    let (icons, _) = store.config_mut::<ChromeGizmos>();
+    icons.render_layers = RenderLayers::layer(OVERLAY_LAYER);
+    icons.line.width = 3.0;
+    let (lines, _) = store.config_mut::<ChromeLines>();
+    lines.render_layers = RenderLayers::layer(OVERLAY_LAYER);
+    lines.line.width = 1.0;
 }
 
 fn visibility(settings: &Settings) -> Visibility {
-    if settings.window == WindowStyle::Circle {
+    if settings.mode == DisplayMode::Cake {
         Visibility::Inherited
     } else {
         Visibility::Hidden
@@ -204,7 +215,8 @@ fn spawn(
     for b in ChromeButton::ALL {
         commands.spawn((
             Mesh2d(meshes.add(BUTTONS.mesh(b as usize, n, RADIUS))),
-            MeshMaterial2d(materials.add(ColorMaterial::from_color(palette::CONTROL_IDLE))),
+            // Unlit until hovered: see `shade`.
+            MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::NONE))),
             Transform::from_xyz(0.0, 0.0, -5.0),
             layer.clone(),
             Segment(b),
@@ -236,7 +248,7 @@ pub fn block_pointer(
     mut blocked: ResMut<PointerBlocked>,
 ) {
     let over_ui = interactions.iter().any(|i| *i != Interaction::None);
-    let on_frame = settings.window == WindowStyle::Circle
+    let on_frame = settings.mode == DisplayMode::Cake
         && cursor.ui.is_some_and(|p| p.length() > PLAY_RADIUS);
     blocked.set_if_neq(PointerBlocked(
         over_ui || claimed.0 || on_frame || !opening.done(),
@@ -307,7 +319,7 @@ fn press(
                 pin(&mut window, flags.pinned);
             }
         }
-        Some(ChromeButton::Style) => settings.window = settings.window.toggled(),
+        Some(ChromeButton::Style) => settings.mode = settings.mode.toggled(),
         None => {
             let resize = (r >= RADIUS - RESIZE_BAND).then(|| octant(p));
             request(&mut window, resize);
@@ -397,7 +409,7 @@ fn kwin_keep_above(on: bool) {
 #[cfg(target_family = "wasm")]
 fn kwin_keep_above(_on: bool) {}
 
-/// Slice fills: hover, and the pin while it is on.
+/// Section fills: only under the pointer, and the pin while it is on.
 fn shade(
     cursor: Res<Cursor>,
     flags: Res<WindowFlags>,
@@ -411,13 +423,28 @@ fn shade(
             (true, ChromeButton::Close) => palette::CLOSE_HOVER,
             (true, _) => palette::CONTROL_HOVER,
             (false, ChromeButton::Pin) if flags.pinned => palette::CONTROL_LIT,
-            (false, _) => palette::CONTROL_IDLE,
+            (false, _) => Color::NONE,
         };
         palette::tint(&mut materials, &material.0, fill);
     }
 }
 
-fn draw(mut gizmos: Gizmos<ChromeGizmos>, cursor: Res<Cursor>, flags: Res<WindowFlags>) {
+fn draw(
+    mut gizmos: Gizmos<ChromeGizmos>,
+    mut lines: Gizmos<ChromeLines>,
+    cursor: Res<Cursor>,
+    flags: Res<WindowFlags>,
+) {
+    // The sections' edges, across the ring.
+    let n = ChromeButton::ALL.len();
+    for i in 0..n {
+        let (from, to) = BUTTONS.span(i, n);
+        for edge in [from, to] {
+            let dir = Vec2::from_angle(edge);
+            lines.line_2d(dir * PLAY_RADIUS, dir * RADIUS, DIVIDER);
+        }
+    }
+
     let hover = cursor.ui;
     // The resize band shows itself while the pointer is on it.
     if hover.is_some_and(|p| (RADIUS - RESIZE_BAND..=RADIUS).contains(&p.length())) {
@@ -432,6 +459,10 @@ fn draw(mut gizmos: Gizmos<ChromeGizmos>, cursor: Res<Cursor>, flags: Res<Window
 
     for b in ChromeButton::ALL {
         let c = b.centre();
+        // Each icon is turned with its slice, its top toward the rim, as the
+        // names along the ring are.
+        let turn = Rot2::radians(ringmesh::angle_of(c) - std::f32::consts::FRAC_PI_2);
+        let at = |x: f32, y: f32| c + turn * Vec2::new(x, y);
         let lit = hovered == Some(b) || (b == ChromeButton::Pin && flags.pinned);
         let color = if b == ChromeButton::Pin && !flags.can_pin {
             palette::FAINT
@@ -443,36 +474,33 @@ fn draw(mut gizmos: Gizmos<ChromeGizmos>, cursor: Res<Cursor>, flags: Res<Window
         let s = SYMBOL;
         match b {
             ChromeButton::Close => {
-                gizmos.line_2d(c + Vec2::new(-s, -s), c + Vec2::new(s, s), color);
-                gizmos.line_2d(c + Vec2::new(-s, s), c + Vec2::new(s, -s), color);
+                gizmos.line_2d(at(-s, -s), at(s, s), color);
+                gizmos.line_2d(at(-s, s), at(s, -s), color);
             }
             ChromeButton::Maximize => {
-                gizmos.rect_2d(Isometry2d::from_translation(c), Vec2::splat(1.8 * s), color);
+                gizmos.rect_2d(Isometry2d::new(c, turn), Vec2::splat(1.8 * s), color);
             }
             ChromeButton::Minimize => {
-                gizmos.line_2d(c + Vec2::new(-s, -0.7 * s), c + Vec2::new(s, -0.7 * s), color);
+                gizmos.line_2d(at(-s, -0.7 * s), at(s, -0.7 * s), color);
             }
             ChromeButton::Pin => {
                 // A drawing pin: head, and needle.
                 gizmos
-                    .circle_2d(Isometry2d::from_translation(c + Vec2::Y * 0.35 * s), 0.55 * s, color)
+                    .circle_2d(Isometry2d::from_translation(at(0.0, 0.35 * s)), 0.55 * s, color)
                     .resolution(16);
-                gizmos.line_2d(c + Vec2::new(0.0, -0.2 * s), c + Vec2::new(0.0, -s), color);
+                gizmos.line_2d(at(0.0, -0.2 * s), at(0.0, -s), color);
             }
             ChromeButton::Style => {
-                // A little ordinary window: what this button switches to.
-                gizmos.rect_2d(
-                    Isometry2d::from_translation(c),
-                    Vec2::new(2.0 * s, 1.6 * s),
-                    color,
-                );
-                gizmos.line_2d(c + Vec2::new(-s, 0.4 * s), c + Vec2::new(s, 0.4 * s), color);
+                // A little ordinary window: this button switches to window
+                // mode.
+                gizmos.rect_2d(Isometry2d::new(c, turn), Vec2::new(2.0 * s, 1.6 * s), color);
+                gizmos.line_2d(at(-s, 0.4 * s), at(s, 0.4 * s), color);
             }
         }
     }
 }
 
-/// Follow the style setting: decorations, the buttons and the mask, the
+/// Follow the display mode: decorations, the buttons and the mask, the
 /// backdrop behind the circle, the arc the buttons reserve from labels, and
 /// the saved settings file.
 fn apply_style(
@@ -485,7 +513,7 @@ fn apply_style(
     if !settings.is_changed() {
         return;
     }
-    let circle = settings.window == WindowStyle::Circle;
+    let circle = settings.mode == DisplayMode::Cake;
     if window.decorations == circle {
         window.decorations = !circle;
     }
@@ -500,7 +528,7 @@ fn apply_style(
         v.set_if_neq(visibility(&settings));
     }
     for mut camera in &mut backdrop {
-        camera.clear_color = backdrop_clear(settings.window);
+        camera.clear_color = backdrop_clear(settings.mode);
     }
     reserved.set_if_neq(ReservedArcs(if circle {
         vec![Reserved {

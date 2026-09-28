@@ -24,7 +24,7 @@ use bevy::ui::IsDefaultUiCamera;
 use bevy::window::PrimaryWindow;
 
 use crate::chrome::{PointerBlocked, PointerSet, RADIUS};
-use crate::settings::{Settings, WindowStyle};
+use crate::settings::{Settings, DisplayMode};
 use crate::{AppState, Match, palette};
 
 /// Units that always fit the window: the whole circle, frame included.
@@ -122,25 +122,25 @@ fn fitted() -> Projection {
     })
 }
 
-/// What the backdrop clears to: nothing around a circle window, the
-/// background colour in a normal one.
-pub fn backdrop_clear(style: WindowStyle) -> ClearColorConfig {
-    ClearColorConfig::Custom(match style {
-        WindowStyle::Circle => Color::NONE,
-        WindowStyle::Windowed => palette::BACKGROUND,
+/// What the backdrop clears to: nothing around the circle in cake mode, the
+/// background colour in window mode.
+pub fn backdrop_clear(mode: DisplayMode) -> ClearColorConfig {
+    ClearColorConfig::Custom(match mode {
+        DisplayMode::Cake => Color::NONE,
+        DisplayMode::Window => palette::BACKGROUND,
     })
 }
 
 fn spawn(mut commands: Commands, settings: Res<Settings>) {
     // All three render into the window's shared intermediate texture, and
     // only the overlay copies it to the window, replacing what is there. That
-    // keeps the transparent pixels that make the circle window's corners
+    // keeps the transparent pixels that make cake mode's corners
     // see-through.
     commands.spawn((
         Camera2d,
         Camera {
             order: -1,
-            clear_color: backdrop_clear(settings.window),
+            clear_color: backdrop_clear(settings.mode),
             output_mode: CameraOutputMode::Skip,
             ..default()
         },

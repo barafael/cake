@@ -179,17 +179,19 @@ flipping on the lower half of the screen so they never read upside down.
 When the game opens, the circle and everything in it grows out of the centre
 to full size over one second, easing out.
 
-## The circle window
+## Cake mode and window mode
 
-On desktop the game *is* the circle: a frameless, transparent window of
-which only a disk shows. Its outer ring (radius 512 to 600 of 600) simply
-continues the nebula, and is the window chrome:
+On desktop the game runs in **cake mode**: it *is* the circle, a
+frameless, transparent window of which only a disk shows. Its outer ring
+(radius 512 to 600 of 600) simply continues the nebula, and is the window
+chrome:
 
 - drag the ring to move the window;
 - drag its outermost band to resize, in the direction of the edge grabbed;
-- slices of the ring on its top arc, each with a large icon: close,
-  maximise, minimise, pin always-on-top, and switch to a normal window.
-  Players' names step aside for them.
+- sections of the ring on its top arc, marked off by thin lines, each with
+  a large icon: close, maximise, minimise, pin always-on-top, and switch to
+  window mode. A section lights up under the pointer, and players' names
+  step aside for them.
 
 A move or resize hands the pointer to the compositor, which keeps the
 button's release to itself. So the game lets go of the button the moment it
@@ -213,10 +215,10 @@ custom material, because `ColorMaterial` forces alpha to 1 in opaque mode.
 `cargo run -p cake-bevy --example surface_probe` prints what a machine's
 surface supports.
 
-A normal decorated window is a setting: the button on the ring, or in the
-lobby. It is saved in `~/.config/cake/settings`, and `CAKE_WINDOW=windowed`
-or `CAKE_WINDOW=circle` overrides it for one run. The web build is always an
-ordinary page.
+**Window mode**, an ordinary decorated window, is the alternative: switch
+with the section on the ring or the button in the lobby. The choice is saved
+in `~/.config/cake/settings`, and `CAKE_MODE=window` or `CAKE_MODE=cake`
+overrides it for one run. The web build is always an ordinary page.
 
 ## Background
 

@@ -1,5 +1,5 @@
 // Writes fully transparent pixels. Drawn as an opaque (unblended) mesh, it
-// overwrites whatever is underneath, which is how the circle window gets its
+// overwrites whatever is underneath, which is how cake mode gets its
 // see-through corners. ColorMaterial cannot do this: in opaque mode it forces
 // alpha to 1.
 #import bevy_sprite::mesh2d_vertex_output::VertexOutput
