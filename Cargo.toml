@@ -14,7 +14,7 @@ cake-ai = { path = "cake-ai" }
 bevy = "0.19"
 # The fork chinese-checke.rs and omdurman use: the crates.io release does not
 # yet support Bevy 0.19.
-bevy_matchbox = { git = "https://github.com/barafael/matchbox.git" }
+bevy_matchbox = { git = "https://github.com/barafael/matchbox.git", branch = "bevy-0.19-socket-hardening" }
 postcard = { version = "1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
 
