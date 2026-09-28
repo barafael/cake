@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
-use cake_bevy::settings::{self, Settings, DisplayMode};
+use cake_bevy::settings::{self, DisplayMode, Settings};
 use cake_bevy::{logic_plugin, view_plugin, web};
 
 fn main() {
@@ -8,7 +8,11 @@ fn main() {
     web::prevent_context_menu();
     let settings = Settings::load();
     let cake = settings.mode == DisplayMode::Cake;
-    let window = Window {
+    #[cfg(not(target_family = "wasm"))]
+    let recording = cake_bevy::demo::Recording::from_env();
+    #[cfg(target_family = "wasm")]
+    let recording: Option<()> = None;
+    let mut window = Window {
         title: "cake".into(),
         // In cake mode the circle is the whole window: square, and small
         // enough for a laptop screen. Window mode gets room to spare.
@@ -26,6 +30,12 @@ fn main() {
         fit_canvas_to_parent: true,
         ..default()
     };
+    if recording.is_some() {
+        // Frames go to the video as fast as they can be made, and the window
+        // leaves the keyboard where it was.
+        window.present_mode = bevy::window::PresentMode::AutoNoVsync;
+        window.focused = false;
+    }
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(window),
@@ -33,8 +43,14 @@ fn main() {
     }))
     .insert_resource(settings)
     .add_plugins((logic_plugin, view_plugin));
+    #[cfg(not(target_family = "wasm"))]
+    if let Some(recording) = recording {
+        app.insert_resource(recording)
+            .add_plugins(cake_bevy::demo::plugin);
+    }
     if let Some(shots) = Shots::from_env() {
-        app.insert_resource(shots).add_systems(Update, dev_screenshot);
+        app.insert_resource(shots)
+            .add_systems(Update, dev_screenshot);
     }
     app.run();
 }
@@ -76,7 +92,11 @@ impl Shots {
 }
 
 fn dev_screenshot(mut commands: Commands, time: Res<Time>, mut shots: ResMut<Shots>) {
-    if shots.due.last().is_none_or(|(at, _)| time.elapsed_secs() < *at) {
+    if shots
+        .due
+        .last()
+        .is_none_or(|(at, _)| time.elapsed_secs() < *at)
+    {
         return;
     }
     let Some((_, path)) = shots.due.pop() else {
@@ -86,15 +106,17 @@ fn dev_screenshot(mut commands: Commands, time: Res<Time>, mut shots: ResMut<Sho
     commands
         .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
         .observe(
-            move |shot: On<bevy::render::view::screenshot::ScreenshotCaptured>| {
-                match shot.image.clone().try_into_dynamic() {
-                    Ok(image) => {
-                        if let Err(error) = image.into_rgba8().save(&path) {
-                            error!(%error, "could not save the screenshot");
-                        }
+            move |shot: On<bevy::render::view::screenshot::ScreenshotCaptured>| match shot
+                .image
+                .clone()
+                .try_into_dynamic()
+            {
+                Ok(image) => {
+                    if let Err(error) = image.into_rgba8().save(&path) {
+                        error!(%error, "could not save the screenshot");
                     }
-                    Err(error) => error!(%error, "could not convert the screenshot"),
                 }
+                Err(error) => error!(%error, "could not convert the screenshot"),
             },
         );
 }

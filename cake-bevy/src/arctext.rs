@@ -170,7 +170,11 @@ pub fn glyph_transform(i: usize, n: usize, angle: f32, radius: f32, size: f32) -
     let upper = angle.sin() >= -0.05;
     let step = size * ADVANCE / radius;
     let offset = (i as f32 - (n as f32 - 1.0) / 2.0) * step;
-    let a = if upper { angle - offset } else { angle + offset };
+    let a = if upper {
+        angle - offset
+    } else {
+        angle + offset
+    };
     let turn = if upper { a - FRAC_PI_2 } else { a + FRAC_PI_2 };
     (Vec2::from_angle(a) * radius, turn)
 }
@@ -195,7 +199,8 @@ fn place(
             color.set_if_neq(TextColor(label.color));
             let (at, turn) = glyph_transform(glyph.0, n, angle, label.radius, label.size);
             tf.set_if_neq(
-                Transform::from_translation(at.extend(1.0)).with_rotation(Quat::from_rotation_z(turn)),
+                Transform::from_translation(at.extend(1.0))
+                    .with_rotation(Quat::from_rotation_z(turn)),
             );
         }
     }

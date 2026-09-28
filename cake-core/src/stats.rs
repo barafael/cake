@@ -24,13 +24,16 @@ const fn per_sec(v: i64) -> i64 {
 }
 
 /// What an entity is.
-#[derive(
-    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 pub enum Kind {
     Hq,
     Econ,
+    /// The gun turret: rapid bullets.
     Turret,
+    /// Slow plasma balls that splash where they land.
+    PlasmaTurret,
+    /// Homing missiles at long range.
+    MissileTurret,
     Brawler,
     Skirmisher,
     Raider,
@@ -41,8 +44,30 @@ impl Kind {
     /// What an HQ can produce, in hotkey order.
     pub const UNITS: [Kind; 4] = [Kind::Brawler, Kind::Skirmisher, Kind::Raider, Kind::Utility];
 
+    /// What a utility can build.
+    pub const TURRETS: [Kind; 3] = [Kind::Turret, Kind::PlasmaTurret, Kind::MissileTurret];
+
+    pub const ALL: [Kind; 9] = [
+        Kind::Hq,
+        Kind::Econ,
+        Kind::Turret,
+        Kind::PlasmaTurret,
+        Kind::MissileTurret,
+        Kind::Brawler,
+        Kind::Skirmisher,
+        Kind::Raider,
+        Kind::Utility,
+    ];
+
     pub fn is_structure(self) -> bool {
-        matches!(self, Kind::Hq | Kind::Econ | Kind::Turret)
+        matches!(self, Kind::Hq | Kind::Econ) || self.is_turret()
+    }
+
+    pub fn is_turret(self) -> bool {
+        matches!(
+            self,
+            Kind::Turret | Kind::PlasmaTurret | Kind::MissileTurret
+        )
     }
 
     pub fn is_mobile(self) -> bool {
@@ -54,6 +79,8 @@ impl Kind {
             Kind::Hq => &HQ,
             Kind::Econ => &ECON,
             Kind::Turret => &TURRET,
+            Kind::PlasmaTurret => &PLASMA_TURRET,
+            Kind::MissileTurret => &MISSILE_TURRET,
             Kind::Brawler => &BRAWLER,
             Kind::Skirmisher => &SKIRMISHER,
             Kind::Raider => &RAIDER,
@@ -65,7 +92,9 @@ impl Kind {
         match self {
             Kind::Hq => "HQ",
             Kind::Econ => "Economy",
-            Kind::Turret => "Turret",
+            Kind::Turret => "Gun turret",
+            Kind::PlasmaTurret => "Plasma turret",
+            Kind::MissileTurret => "Missile turret",
             Kind::Brawler => "Brawler",
             Kind::Skirmisher => "Skirmisher",
             Kind::Raider => "Raider",
@@ -80,6 +109,30 @@ pub struct Weapon {
     pub range: i64,
     pub damage: i32,
     pub cooldown: u32,
+    pub shot: Shot,
+}
+
+/// How a weapon's damage gets there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Shot {
+    /// At once, hand to hand.
+    Melee,
+    /// A fast projectile that follows its target and always hits.
+    Bullet { speed: i64 },
+    /// A slow ball that flies to where the target was and bursts there,
+    /// hurting everything of the enemy's within `splash`. It can be dodged.
+    Plasma { speed: i64, splash: i64 },
+    /// Launched sideways, it steers toward its target: `turn` is how much of
+    /// the way to the wanted heading it turns each tick, in thousandths.
+    Missile { speed: i64, turn: i64 },
+}
+
+/// A building's explosion: units within `radius` are thrown back, up to
+/// `force` milli-units per tick at the centre, divided by their mass.
+#[derive(Debug)]
+pub struct Blast {
+    pub radius: i64,
+    pub force: i64,
 }
 
 #[derive(Debug)]
@@ -97,6 +150,11 @@ pub struct Stats {
     /// Milli-supply.
     pub cost: i64,
     pub build_ticks: u32,
+    /// How hard to throw: blasts are divided by it. Zero for what doesn't
+    /// move.
+    pub mass: i64,
+    /// What happens when it is destroyed, for buildings.
+    pub blast: Option<Blast>,
 }
 
 pub const BRAWLER: Stats = Stats {
@@ -109,9 +167,12 @@ pub const BRAWLER: Stats = Stats {
         range: 10 * UNIT,
         damage: 7,
         cooldown: 10,
+        shot: Shot::Melee,
     }),
     cost: 60 * SUPPLY,
     build_ticks: secs(6),
+    mass: 6,
+    blast: None,
 };
 
 pub const SKIRMISHER: Stats = Stats {
@@ -124,9 +185,14 @@ pub const SKIRMISHER: Stats = Stats {
         range: 65 * UNIT,
         damage: 10,
         cooldown: 20,
+        shot: Shot::Bullet {
+            speed: per_sec(500 * UNIT),
+        },
     }),
     cost: 50 * SUPPLY,
     build_ticks: secs(5),
+    mass: 3,
+    blast: None,
 };
 
 pub const RAIDER: Stats = Stats {
@@ -139,9 +205,14 @@ pub const RAIDER: Stats = Stats {
         range: 18 * UNIT,
         damage: 5,
         cooldown: 10,
+        shot: Shot::Bullet {
+            speed: per_sec(420 * UNIT),
+        },
     }),
     cost: 45 * SUPPLY,
     build_ticks: secs(4),
+    mass: 2,
+    blast: None,
 };
 
 pub const UTILITY: Stats = Stats {
@@ -153,6 +224,8 @@ pub const UTILITY: Stats = Stats {
     weapon: None,
     cost: 50 * SUPPLY,
     build_ticks: secs(6),
+    mass: 3,
+    blast: None,
 };
 
 pub const HQ: Stats = Stats {
@@ -165,9 +238,18 @@ pub const HQ: Stats = Stats {
         range: 60 * UNIT,
         damage: 10,
         cooldown: 20,
+        shot: Shot::Missile {
+            speed: per_sec(200 * UNIT),
+            turn: 180,
+        },
     }),
     cost: 0,
     build_ticks: 0,
+    mass: 0,
+    blast: Some(Blast {
+        radius: 110 * UNIT,
+        force: 30 * UNIT,
+    }),
 };
 
 pub const ECON: Stats = Stats {
@@ -179,6 +261,11 @@ pub const ECON: Stats = Stats {
     weapon: None,
     cost: 0,
     build_ticks: secs(5),
+    mass: 0,
+    blast: Some(Blast {
+        radius: 70 * UNIT,
+        force: 18 * UNIT,
+    }),
 };
 
 pub const TURRET: Stats = Stats {
@@ -189,11 +276,67 @@ pub const TURRET: Stats = Stats {
     radar: 0,
     weapon: Some(Weapon {
         range: 55 * UNIT,
-        damage: 15,
-        cooldown: 20,
+        damage: 5,
+        cooldown: 7,
+        shot: Shot::Bullet {
+            speed: per_sec(600 * UNIT),
+        },
     }),
     cost: 75 * SUPPLY,
     build_ticks: secs(8),
+    mass: 0,
+    blast: Some(Blast {
+        radius: 60 * UNIT,
+        force: 14 * UNIT,
+    }),
+};
+
+pub const PLASMA_TURRET: Stats = Stats {
+    hp: 450,
+    speed: 0,
+    radius: 11 * UNIT,
+    vision: 90 * UNIT,
+    radar: 0,
+    weapon: Some(Weapon {
+        range: 70 * UNIT,
+        damage: 36,
+        cooldown: 50,
+        shot: Shot::Plasma {
+            speed: per_sec(60 * UNIT),
+            splash: 28 * UNIT,
+        },
+    }),
+    cost: 100 * SUPPLY,
+    build_ticks: secs(10),
+    mass: 0,
+    blast: Some(Blast {
+        radius: 70 * UNIT,
+        force: 18 * UNIT,
+    }),
+};
+
+pub const MISSILE_TURRET: Stats = Stats {
+    hp: 400,
+    speed: 0,
+    radius: 10 * UNIT,
+    vision: 110 * UNIT,
+    radar: 0,
+    weapon: Some(Weapon {
+        range: 95 * UNIT,
+        damage: 24,
+        cooldown: 36,
+        shot: Shot::Missile {
+            speed: per_sec(220 * UNIT),
+            turn: 160,
+        },
+    }),
+    cost: 110 * SUPPLY,
+    build_ticks: secs(10),
+    mass: 0,
+    blast: Some(Blast {
+        radius: 60 * UNIT,
+        force: 14 * UNIT,
+    }),
 };
 
 /// Damage multiplier, in percent: the counter triangle (brawler > raider >
@@ -204,7 +347,8 @@ pub fn damage_pct(attacker: Kind, target: Kind) -> i32 {
         (Brawler, Raider) => 200,
         (Skirmisher, Brawler) => 300,
         (Raider, Skirmisher) => 150,
-        (Raider, Hq | Econ | Turret | Utility) => 300,
+        (Raider, Utility) => 300,
+        (Raider, t) if t.is_structure() => 300,
         _ => 100,
     }
 }
@@ -213,6 +357,10 @@ pub fn damage_pct(attacker: Kind, target: Kind) -> i32 {
 pub const STARTING_SUPPLY: i64 = 100 * SUPPLY;
 pub const HQ_INCOME: i64 = per_sec(5 * SUPPLY);
 pub const ECON_INCOME: i64 = per_sec(2 * SUPPLY);
+/// Each finished economy building also makes the HQ build this many percent
+/// faster, so that a bigger economy can be spent: one production queue alone
+/// can't use much more than the HQ's own income.
+pub const ECON_PRODUCTION_PCT: u32 = 15;
 pub const QUEUE_MAX: usize = 5;
 pub const UNIT_CAP: usize = 60;
 
@@ -223,6 +371,10 @@ pub const ECON_SPACING: i64 = 150 * UNIT;
 pub const ENEMY_HQ_CLEARANCE: i64 = 100 * UNIT;
 /// Structures keep this much clear space between their edges.
 pub const STRUCTURE_GAP: i64 = 4 * UNIT;
+
+/// A missile that has flown this long without reaching its target bursts
+/// where it is.
+pub const MISSILE_FUEL: u32 = secs(4);
 
 // Utility abilities.
 /// How close a utility must stand to lay a turret down.
@@ -247,15 +399,7 @@ mod tests {
     /// hold targets they cannot see.
     #[test]
     fn every_weapon_is_inside_its_vision() {
-        for kind in [
-            Kind::Hq,
-            Kind::Econ,
-            Kind::Turret,
-            Kind::Brawler,
-            Kind::Skirmisher,
-            Kind::Raider,
-            Kind::Utility,
-        ] {
+        for kind in Kind::ALL {
             let s = kind.stats();
             if let Some(w) = &s.weapon {
                 assert!(w.range < s.vision, "{kind:?}");

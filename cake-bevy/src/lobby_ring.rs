@@ -39,7 +39,9 @@ pub fn plugin(app: &mut App) {
         })
         .add_systems(
             Update,
-            (sync, animate, draw).chain().run_if(in_state(AppState::Lobby)),
+            (sync, animate, draw)
+                .chain()
+                .run_if(in_state(AppState::Lobby)),
         );
 }
 
@@ -199,7 +201,10 @@ mod tests {
         let span = |i: usize| s[i].1 - s[i].0;
         assert!((span(0) - PI).abs() < 1e-5);
         assert!((span(1) - PI).abs() < 1e-5);
-        assert!(span(2).abs() < 1e-6, "a slot still at weight 0 has no room yet");
+        assert!(
+            span(2).abs() < 1e-6,
+            "a slot still at weight 0 has no room yet"
+        );
         assert!((s[0].0 + s[0].1).abs() < 1e-5, "the first is centred on 0");
     }
 

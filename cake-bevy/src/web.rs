@@ -130,7 +130,10 @@ mod tests {
     #[test]
     fn the_room_is_read_from_the_fragment() {
         assert_eq!(room_from_fragment("#room=abc"), RoomId::parse("abc").ok());
-        assert_eq!(room_from_fragment("x=1&room=q-7"), RoomId::parse("q-7").ok());
+        assert_eq!(
+            room_from_fragment("x=1&room=q-7"),
+            RoomId::parse("q-7").ok()
+        );
         assert_eq!(room_from_fragment("#room=a/b"), None);
         assert_eq!(room_from_fragment(""), None);
     }

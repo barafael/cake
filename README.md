@@ -36,6 +36,26 @@ URL as `#room=name`.
 the window, alpha included, which is handy for checking the circle's
 transparency.
 
+### Recording a demo
+
+A watched bot match can be recorded to video, hands off (needs `ffmpeg`):
+
+```sh
+CAKE_BOTS=3 CAKE_WATCH=1 CAKE_TEMPERS=turtle,warlord,raider CAKE_SPEED=2.5 \
+  CAKE_RECORD=fortress.mp4 CAKE_RECORD_TITLE="Fortress" cargo run -p cake-bevy
+```
+
+- `CAKE_RECORD` captures every frame from the start of the match, at a fixed
+  30 frames per second of game time, so the video keeps its pace however slow
+  capturing is. The mouse and keyboard are ignored meanwhile. A director
+  follows the heaviest fighting, and once the match is decided the recap
+  shows each metric in turn before the app quits.
+- `CAKE_RECORD_TITLE` is shown in the middle during wide shots, and
+  `CAKE_RECORD_SECS` caps the length.
+- `CAKE_SPEED=n` runs the match n times as fast; `CAKE_TEMPERS` picks the
+  bots' temperaments seat by seat (`warlord`, `raider`, `turtle`,
+  `balanced`).
+
 ## Test
 
 ```sh

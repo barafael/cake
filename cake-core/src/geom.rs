@@ -171,7 +171,11 @@ pub fn isqrt(v: i64) -> i64 {
 /// Scale `(x, y)` to length `len`. The zero vector stays zero.
 pub fn scaled(x: i64, y: i64, len: i64) -> (i64, i64) {
     let d = isqrt(x * x + y * y);
-    if d == 0 { (0, 0) } else { (x * len / d, y * len / d) }
+    if d == 0 {
+        (0, 0)
+    } else {
+        (x * len / d, y * len / d)
+    }
 }
 
 /// The centre angle of seat `i` of `n` around the ring.
@@ -256,7 +260,10 @@ mod tests {
         let p = Pos::new(Angle::from_turns(15, 16), R_MID);
         let target = Pos::new(Angle::from_turns(1, 16), R_MID);
         let (next, _) = p.step_toward(target, UNIT);
-        assert!(next.a.delta(p.a) > 0, "should turn counter-clockwise through zero");
+        assert!(
+            next.a.delta(p.a) > 0,
+            "should turn counter-clockwise through zero"
+        );
     }
 
     #[test]

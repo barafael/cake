@@ -45,6 +45,8 @@ pub const CONTROL_PRESSED: Color = Color::srgba(1.0, 1.0, 1.0, 0.26);
 pub const CONTROL_OFF: Color = Color::srgba(1.0, 1.0, 1.0, 0.03);
 /// A control that is switched on, like the pin.
 pub const CONTROL_LIT: Color = Color::srgba(1.0, 1.0, 1.0, 0.12);
+/// The chosen one of a row of choices.
+pub const CONTROL_CHOSEN: Color = Color::srgba(1.0, 1.0, 1.0, 0.24);
 pub const CLOSE_HOVER: Color = Color::srgba(0.9, 0.2, 0.2, 0.5);
 
 /// Recolour a material, touching it only when the colour really changes (a

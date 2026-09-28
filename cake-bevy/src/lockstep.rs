@@ -123,14 +123,32 @@ fn pump(
     }
 }
 
+/// Development aid (native): `CAKE_SPEED=8` runs the host's clock eight times
+/// as fast, to watch a bot match through to its end.
+fn speed() -> f32 {
+    static SPEED: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SPEED.get_or_init(|| {
+        std::env::var("CAKE_SPEED")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .map_or(1.0, |s| s.clamp(0.1, 64.0))
+    })
+}
+
 /// The host's clock: one turn per tick of wall time.
-fn host_clock(time: Res<Time>, socket: Option<ResMut<MatchboxSocket>>, net: Res<NetState>, mut m: ResMut<Match>) {
+fn host_clock(
+    time: Res<Time>,
+    socket: Option<ResMut<MatchboxSocket>>,
+    net: Res<NetState>,
+    mut m: ResMut<Match>,
+) {
     let Some(host) = m.host.as_mut() else {
         return;
     };
     // A long hitch (a dragged window, a breakpoint) should not be replayed
     // as a burst of ticks: cap what one frame can owe.
-    host.accum = (host.accum + time.delta_secs()).min(5.0 * TICK_SECS);
+    let speed = speed();
+    host.accum = (host.accum + time.delta_secs() * speed).min(5.0 * TICK_SECS * speed);
     let mut socket = socket;
     while m.host.as_ref().is_some_and(|h| h.accum >= TICK_SECS) {
         if let Some(h) = m.host.as_mut() {
@@ -141,6 +159,13 @@ fn host_clock(time: Res<Time>, socket: Option<ResMut<MatchboxSocket>>, net: Res<
         };
         if let Some(socket) = socket.as_mut() {
             broadcast(socket, &net.peers, &NetMsg::Turn { tick, cmds });
+        }
+        // Apply it before cutting the next, so that bots think against the
+        // state as it now stands: several turns can fall due in one frame.
+        if let Some(Some((tick, hash))) = m.apply_next()
+            && let Some(host) = m.host.as_mut()
+        {
+            host.hashes.record(tick, hash);
         }
     }
 }

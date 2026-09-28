@@ -33,13 +33,12 @@ fn start_signaling_server() -> u16 {
                 .enable_all()
                 .build()
                 .expect("a tokio runtime for the signaling server");
-            let server = matchbox_signaling::SignalingServer::full_mesh_builder(
-                std::net::SocketAddr::new(
+            let server =
+                matchbox_signaling::SignalingServer::full_mesh_builder(std::net::SocketAddr::new(
                     std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
                     port,
-                ),
-            )
-            .build();
+                ))
+                .build();
             runtime
                 .block_on(server.serve())
                 .expect("the signaling server ran");

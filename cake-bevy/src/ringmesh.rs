@@ -127,11 +127,14 @@ pub fn ring_sector(inner: f32, outer: f32, from: f32, to: f32, uv_radius: f32) -
         }
     }
     let normals = vec![[0.0, 0.0, 1.0]; positions.len()];
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-        .with_inserted_indices(Indices::U32(indices))
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(Indices::U32(indices))
 }
 
 /// A whole ring.
@@ -155,14 +158,18 @@ mod tests {
         assert_eq!(uvs[1], [1.0, 0.5]);
         // The last outer vertex is at (0, 20): the middle of the top edge.
         let last = uvs[uvs.len() - 1];
-        assert!((last[0] - 0.5).abs() < 1e-5 && last[1].abs() < 1e-5, "{last:?}");
+        assert!(
+            (last[0] - 0.5).abs() < 1e-5 && last[1].abs() < 1e-5,
+            "{last:?}"
+        );
     }
 
     #[test]
     fn triangles_wind_counter_clockwise() {
         for (from, to) in [(0.0, 1.0), (1.0, 0.0)] {
             let mesh = ring_sector(10.0, 20.0, from, to, 20.0);
-            let Some(VertexAttributeValues::Float32x3(p)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+            let Some(VertexAttributeValues::Float32x3(p)) =
+                mesh.attribute(Mesh::ATTRIBUTE_POSITION)
             else {
                 panic!("positions");
             };
@@ -170,7 +177,8 @@ mod tests {
                 panic!("indices");
             };
             for t in idx.chunks(3) {
-                let [a, b, c] = [t[0], t[1], t[2]].map(|i| Vec2::new(p[i as usize][0], p[i as usize][1]));
+                let [a, b, c] =
+                    [t[0], t[1], t[2]].map(|i| Vec2::new(p[i as usize][0], p[i as usize][1]));
                 assert!((b - a).perp_dot(c - a) > 0.0, "clockwise triangle {t:?}");
             }
         }
@@ -180,7 +188,10 @@ mod tests {
     fn spans_hold_angles_across_the_seam() {
         let span = (170f32.to_radians(), 200f32.to_radians());
         assert!(in_span(180f32.to_radians(), span));
-        assert!(in_span(-170f32.to_radians(), span), "atan2's side of the seam");
+        assert!(
+            in_span(-170f32.to_radians(), span),
+            "atan2's side of the seam"
+        );
         assert!(!in_span(0.0, span));
         assert!((wrap_pi(3.0 * PI) - PI).abs() < 1e-5);
         assert!((wrap_pi(-0.5) + 0.5).abs() < 1e-6);
@@ -205,7 +216,10 @@ mod tests {
             for i in 0..3 {
                 assert_eq!(row.at(row.centre_of(i, 3), 3), Some(i));
                 if i < 2 {
-                    assert!(row.centre_of(i, 3).x < row.centre_of(i + 1, 3).x, "left to right");
+                    assert!(
+                        row.centre_of(i, 3).x < row.centre_of(i + 1, 3).x,
+                        "left to right"
+                    );
                 }
             }
         }

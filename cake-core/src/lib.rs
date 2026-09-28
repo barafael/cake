@@ -9,6 +9,7 @@
 pub mod command;
 pub mod geom;
 pub mod hash;
+pub mod history;
 pub mod sim;
 pub mod stats;
 pub mod vision;

@@ -8,6 +8,7 @@ use bevy::prelude::*;
 use bevy_matchbox::prelude::PeerId;
 use cake_ai::Bot;
 use cake_core::geom::Pos;
+use cake_core::history::History;
 use cake_core::stats::TICK_HZ;
 use cake_core::{Command, Entity, EntityId, Event, Seat, Sim};
 use cake_net::{HASH_INTERVAL, HashLog, Member, NetState, Sequencer, Signaling, TurnBuffer};
@@ -15,6 +16,9 @@ use cake_net::{HASH_INTERVAL, HashLog, Member, NetState, Sequencer, Signaling, T
 pub mod arctext;
 pub mod camera;
 pub mod chrome;
+#[cfg(not(target_family = "wasm"))]
+pub mod demo;
+pub mod fx;
 pub mod hud;
 pub mod input;
 pub mod lobby;
@@ -23,8 +27,10 @@ pub mod lockstep;
 pub mod menu;
 pub mod nebula;
 pub mod palette;
+pub mod recap;
 pub mod render;
 pub mod ringmesh;
+pub mod segments;
 pub mod settings;
 pub mod web;
 
@@ -65,6 +71,8 @@ pub struct Match {
     pub host_left: bool,
     /// Events from recently applied ticks, for the renderer to consume.
     pub events: Vec<Event>,
+    /// Everyone's standing over time, for the charts at the end.
+    pub history: History,
 }
 
 /// What only the host keeps: the clock, the sequencer and the bots.
@@ -100,13 +108,15 @@ impl Match {
                 .iter()
                 .enumerate()
                 .filter(|(_, m)| m.is_bot())
-                .map(|(i, _)| Bot::new(i as Seat))
+                .map(|(i, _)| Bot::with_personality(i as Seat, lobby::temperament(i as Seat)))
                 .collect(),
             accum: 0.0,
             verified: 0,
         });
+        let sim = Sim::new(players.len());
         Match {
-            sim: Sim::new(players.len()),
+            history: History::new(&sim),
+            sim,
             prev: Vec::new(),
             alpha: 1.0,
             me,
@@ -157,6 +167,7 @@ impl Match {
         self.prev
             .extend(self.sim.entities.iter().map(|e| (e.id, e.pos)));
         self.sim.step(&cmds);
+        self.history.observe(&self.sim);
         self.events.extend(self.sim.events.iter().cloned());
         // A renderer that isn't running (headless, minimised) must not let
         // this grow without bound.
@@ -164,7 +175,10 @@ impl Match {
             self.events.drain(..2048);
         }
         let tick = self.sim.tick;
-        Some(tick.is_multiple_of(HASH_INTERVAL).then(|| (tick, self.sim.checksum())))
+        Some(
+            tick.is_multiple_of(HASH_INTERVAL)
+                .then(|| (tick, self.sim.checksum())),
+        )
     }
 
     /// Advance by up to one tick's worth of banked time, plus catch-up ticks
@@ -172,7 +186,8 @@ impl Match {
     pub fn advance(&mut self, dt: f32) -> Vec<(u32, u64)> {
         let mut reports = Vec::new();
         if self.is_host() {
-            // The host is the clock: its turns are applied as they are cut.
+            // The host is the clock, and applies its turns as it cuts them
+            // (see `lockstep`); anything still buffered goes now.
             while let Some(report) = self.apply_next() {
                 reports.extend(report);
             }
@@ -205,21 +220,21 @@ impl Match {
 
     /// Where `e` is drawn: between its previous and current position.
     pub fn draw_pos(&self, e: &Entity) -> Vec2 {
-        let now = e.pos;
-        let at = match self.prev.binary_search_by_key(&e.id, |(id, _)| *id) {
-            Ok(i) => {
-                let before = self.prev[i].1;
-                let da = now.a.delta(before.a) as f64 * self.alpha as f64;
-                let r = before.r as f64 + (now.r - before.r) as f64 * self.alpha as f64;
-                Pos {
-                    a: before.a.turned(da as i64),
-                    r: r as i64,
-                }
-            }
-            Err(_) => now,
-        };
-        let (x, y) = at.to_xy();
-        Vec2::new(x as f32, y as f32)
+        match self.prev.binary_search_by_key(&e.id, |(id, _)| *id) {
+            Ok(i) => self.between(self.prev[i].1, e.pos),
+            Err(_) => render::to_vec2(e.pos),
+        }
+    }
+
+    /// Where something that moved from `before` to `now` in the last tick is
+    /// drawn, following the ring.
+    pub fn between(&self, before: Pos, now: Pos) -> Vec2 {
+        let da = now.a.delta(before.a) as f64 * self.alpha as f64;
+        let r = before.r as f64 + (now.r - before.r) as f64 * self.alpha as f64;
+        render::to_vec2(Pos {
+            a: before.a.turned(da as i64),
+            r: r as i64,
+        })
     }
 
     /// Can I see `e`? Watchers see everything.
@@ -247,8 +262,11 @@ pub fn view_plugin(app: &mut App) {
         lobby_ring::plugin,
         menu::plugin,
         nebula::plugin,
+        segments::plugin,
         render::plugin,
+        fx::plugin,
         input::plugin,
         hud::plugin,
+        recap::plugin,
     ));
 }

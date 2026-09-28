@@ -74,7 +74,10 @@ pub enum NetMsg {
     /// Guest -> host: an unsequenced command. Never applied directly.
     Cmd(Command),
     /// Host -> all: everything that happens at `tick`. The only thing applied.
-    Turn { tick: u32, cmds: Vec<(Seat, Command)> },
+    Turn {
+        tick: u32,
+        cmds: Vec<(Seat, Command)>,
+    },
     /// Guest -> host: my checksum after applying `tick`.
     Hash { tick: u32, hash: u64 },
     /// Host -> all: some peer's state diverged at `tick`.
@@ -241,7 +244,9 @@ impl HashLog {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomIdError {
     Empty,
-    TooLong { len: usize },
+    TooLong {
+        len: usize,
+    },
     /// The offending character, so the message can name it.
     BadChar(char),
 }
@@ -409,7 +414,10 @@ mod tests {
     fn duplicate_and_stale_turns_are_dropped() {
         let mut buf = TurnBuffer::default();
         assert!(buf.push(0, vec![]));
-        assert!(!buf.push(0, vec![(1, Command::CancelProduce)]), "held already");
+        assert!(
+            !buf.push(0, vec![(1, Command::CancelProduce)]),
+            "held already"
+        );
         buf.pop();
         assert!(!buf.push(0, vec![]), "applied already");
     }
@@ -464,6 +472,9 @@ mod tests {
         assert_eq!(RoomId::parse("a/b"), Err(RoomIdError::BadChar('/')));
         assert_eq!(RoomId::parse("café"), Err(RoomIdError::BadChar('é')));
         let long = "a".repeat(RoomId::MAX_LEN + 1);
-        assert!(matches!(RoomId::parse(&long), Err(RoomIdError::TooLong { .. })));
+        assert!(matches!(
+            RoomId::parse(&long),
+            Err(RoomIdError::TooLong { .. })
+        ));
     }
 }

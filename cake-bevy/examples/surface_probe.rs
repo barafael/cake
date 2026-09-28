@@ -56,7 +56,10 @@ fn probe(
         println!("formats:       {:?}", caps.formats);
         println!("alpha modes:   {:?}", caps.alpha_modes);
         println!("present modes: {:?}", caps.present_modes);
-        println!("configured:    format {:?}, alpha {:?}", window.swap_chain_texture_format, window.alpha_mode);
+        println!(
+            "configured:    format {:?}, alpha {:?}",
+            window.swap_chain_texture_format, window.alpha_mode
+        );
     }
 }
 

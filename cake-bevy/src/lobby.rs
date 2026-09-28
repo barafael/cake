@@ -10,6 +10,7 @@
 
 use bevy::prelude::*;
 use bevy_matchbox::prelude::*;
+use cake_core::Seat;
 use cake_core::sim::MAX_SEATS;
 use cake_net::{Member, NetMsg, NetState, RoomId, broadcast, decode, open_socket, send_to};
 
@@ -53,7 +54,8 @@ pub struct LobbyInput(pub Vec<LobbyAction>);
 /// How I appear in the roster: my peer id, or `local` before the signaling
 /// server has given me one (offline solo play).
 pub fn my_key(net: &NetState) -> String {
-    net.my_id.map_or_else(|| "local".to_string(), |id| id.to_string())
+    net.my_id
+        .map_or_else(|| "local".to_string(), |id| id.to_string())
 }
 
 /// A member's name as shown to me: marked when it is me or a bot.
@@ -86,7 +88,14 @@ pub fn plugin(app: &mut App) {
         .add_systems(OnEnter(AppState::Lobby), open_socket)
         .add_systems(
             Update,
-            (elect_host, resume_pending, greet, pump_lobby, host_roster, apply_input)
+            (
+                elect_host,
+                resume_pending,
+                greet,
+                pump_lobby,
+                host_roster,
+                apply_input,
+            )
                 .chain()
                 .run_if(in_state(AppState::Lobby)),
         );
@@ -106,9 +115,10 @@ fn quick_start(mut input: ResMut<LobbyInput>) {
         if std::env::var("CAKE_WATCH").is_ok_and(|v| v == "1") {
             input.0.push(LobbyAction::ToggleWatch);
         }
-        input
-            .0
-            .extend(std::iter::repeat_n(LobbyAction::AddBot, bots.min(MAX_SEATS)));
+        input.0.extend(std::iter::repeat_n(
+            LobbyAction::AddBot,
+            bots.min(MAX_SEATS),
+        ));
         input.0.push(LobbyAction::Start);
     }
     #[cfg(target_family = "wasm")]
@@ -281,7 +291,11 @@ fn host_roster(
     if roster != lobby.members {
         lobby.members = roster;
         if let Some(mut socket) = socket {
-            broadcast(&mut socket, &net.peers, &NetMsg::Roster(lobby.members.clone()));
+            broadcast(
+                &mut socket,
+                &net.peers,
+                &NetMsg::Roster(lobby.members.clone()),
+            );
         }
     }
 }
@@ -353,6 +367,7 @@ fn apply_input(
                     continue;
                 }
                 shuffle(&mut players, web::fresh_seed());
+                name_bots(&mut players);
                 if let Some(socket) = socket.as_mut() {
                     broadcast(
                         socket,
@@ -367,6 +382,42 @@ fn apply_input(
             }
         }
     }
+}
+
+/// Bots are named for their temperament, which their seat decides ("Turtle",
+/// "Raider 2"), so everyone watching can tell who is who. Done by the host
+/// once the seats are dealt, before the `Start` goes out, so every peer sees
+/// the same names.
+fn name_bots(players: &mut [Member]) {
+    let names: Vec<&str> = (0..players.len())
+        .map(|seat| temperament(seat as Seat).name)
+        .collect();
+    for (seat, m) in players.iter_mut().enumerate() {
+        if !m.is_bot() {
+            continue;
+        }
+        let name = names[seat];
+        let before = (0..seat).filter(|&s| names[s] == name).count();
+        m.name = if before == 0 {
+            name.to_string()
+        } else {
+            format!("{name} {}", before + 1)
+        };
+    }
+}
+
+/// The temperament of the bot in `seat`: set by the seat, or (native, for
+/// recording demos) listed in `CAKE_TEMPERS`, as in `turtle,warlord,raider`.
+pub fn temperament(seat: Seat) -> cake_ai::Personality {
+    #[cfg(not(target_family = "wasm"))]
+    if let Some(p) = std::env::var("CAKE_TEMPERS").ok().and_then(|list| {
+        list.split(',')
+            .nth(seat as usize)
+            .and_then(cake_ai::personality::by_name)
+    }) {
+        return p;
+    }
+    cake_ai::personality::for_seat(seat)
 }
 
 /// Fisher–Yates with a small xorshift. Only the host shuffles, and it sends
@@ -402,6 +453,30 @@ fn begin(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bots_are_named_for_their_seat_and_people_keep_theirs() {
+        let bot = |n: u32| Member {
+            peer: None,
+            name: format!("bot {n}"),
+            watching: false,
+        };
+        let person = Member {
+            peer: Some("p".into()),
+            name: "ada".into(),
+            watching: false,
+        };
+        let mut players = vec![bot(1), person.clone(), bot(2), bot(3), bot(4), bot(5)];
+        name_bots(&mut players);
+        assert_eq!(players[1], person, "a person keeps their name");
+        for (seat, m) in players.iter().enumerate().filter(|(_, m)| m.is_bot()) {
+            let temperament = cake_ai::personality::for_seat(seat as Seat).name;
+            assert!(m.name.starts_with(temperament), "{} in seat {seat}", m.name);
+        }
+        // Seats 0 and 4 share a temperament: the second is numbered.
+        assert_ne!(players[0].name, players[4].name);
+        assert!(players[4].name.ends_with(" 2"), "{}", players[4].name);
+    }
 
     #[test]
     fn shuffling_keeps_every_item() {

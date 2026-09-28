@@ -10,25 +10,28 @@
 use bevy::ecs::system::EntityCommands;
 use bevy::prelude::*;
 use bevy_matchbox::prelude::MatchboxSocket;
+use cake_core::Seat;
 use cake_core::geom::sector_center;
 use cake_core::stats::{self, Kind, SUPPLY, TICK_HZ};
-use cake_core::{Outcome, Seat};
 use cake_net::{NetState, RoomId};
 
-use crate::arctext::ArcText;
+use crate::arctext::{ArcText, Frame};
 use crate::chrome::RADIUS;
 use crate::input::{Mode, Selection};
 use crate::lobby::{Lobby, LobbyAction, LobbyInput, display_name, my_key};
+use crate::menu::{MENU_INNER, MENU_OUTER};
+use crate::ringmesh::Slots;
+use crate::segments::{self, Segment, SegmentFills, SegmentLabel, SegmentPressed};
 use crate::settings::{self, Settings};
 use crate::{AppState, Match, palette};
 
 pub fn plugin(app: &mut App) {
     app.add_systems(OnEnter(AppState::Lobby), spawn_lobby)
         .add_systems(OnEnter(AppState::Game), (spawn_game, spawn_labels))
-        .add_systems(Update, (press_buttons, style_buttons))
+        .add_systems(Update, press_segments.after(segments::press))
         .add_systems(
             Update,
-            (lobby_keys, update_lobby).run_if(in_state(AppState::Lobby)),
+            (lobby_keys, enable_lobby, update_lobby).run_if(in_state(AppState::Lobby)),
         )
         .add_systems(
             Update,
@@ -37,13 +40,34 @@ pub fn plugin(app: &mut App) {
         );
 }
 
-/// What a HUD button does.
+/// What a lobby or match segment does.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiAction {
     Lobby(LobbyAction),
-    ToggleWindow,
+    ToggleMode,
     BackToLobby,
 }
+
+/// The lobby's buttons, along the bottom of the inner ring.
+const LOBBY_ROW: Slots = Slots {
+    inner: MENU_INNER,
+    outer: MENU_OUTER,
+    centre: 270.0,
+    width: 19.0,
+    gap: 1.0,
+    clockwise: false,
+};
+
+/// One wide segment at the top of the inner ring: the display mode in the
+/// lobby, the way back to it when a match is over.
+const TOP_SLOT: Slots = Slots {
+    inner: MENU_INNER,
+    outer: MENU_OUTER,
+    centre: 90.0,
+    width: 40.0,
+    gap: 0.0,
+    clockwise: true,
+};
 
 #[derive(Component)]
 struct LobbyInfo;
@@ -53,10 +77,6 @@ struct LobbyRoster;
 
 #[derive(Component)]
 struct LobbyStatus;
-
-/// The label of the window-style button, which names what it switches to.
-#[derive(Component)]
-struct StyleLabel;
 
 #[derive(Component)]
 struct EconomyText;
@@ -73,8 +93,10 @@ struct HintText;
 #[derive(Component)]
 struct BannerText;
 
-#[derive(Component)]
-struct BackButton;
+/// What the middle says to a watcher instead of "Watching", with the
+/// controls hint gone: a demo's title.
+#[derive(Resource, Clone, Debug)]
+pub struct Caption(pub String);
 
 /// A player's name on the map, along their sector.
 #[derive(Component)]
@@ -163,123 +185,131 @@ fn text<'a>(
     ))
 }
 
-/// A button, and its label.
-fn button(
-    commands: &mut Commands,
-    parent: Entity,
-    node: Node,
-    label: &str,
-    action: UiAction,
-) -> (Entity, Entity) {
-    let b = commands
-        .spawn((
-            Button,
-            Node {
-                border_radius: BorderRadius::all(Val::Px(7.0)),
-                ..node
-            },
-            BackgroundColor(palette::CONTROL_IDLE),
-            action,
-            ChildOf(parent),
-        ))
-        .id();
-    let l = commands
-        .spawn((
-            // As wide as the button, so the text is centred on it whatever
-            // its measured width.
-            Node {
-                width: Val::Percent(100.0),
-                ..default()
-            },
-            Text::new(label),
-            font(15.0),
-            TextColor(palette::TEXT),
-            centered(),
-            ChildOf(b),
-        ))
-        .id();
-    (b, l)
-}
+// ---- Segments --------------------------------------------------------------
 
-// ---- Buttons ---------------------------------------------------------------
-
-fn press_buttons(
-    buttons: Query<(&Interaction, &UiAction), Changed<Interaction>>,
+fn press_segments(
+    mut pressed: MessageReader<SegmentPressed>,
+    actions: Query<&UiAction>,
     mut input: ResMut<LobbyInput>,
     mut settings: ResMut<Settings>,
     mut next: ResMut<NextState<AppState>>,
 ) {
-    for (interaction, action) in &buttons {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        match *action {
-            UiAction::Lobby(a) => input.0.push(a),
-            UiAction::ToggleWindow => settings.mode = settings.mode.toggled(),
-            UiAction::BackToLobby => next.set(AppState::Lobby),
+    for SegmentPressed(e) in pressed.read() {
+        match actions.get(*e) {
+            Ok(UiAction::Lobby(a)) => input.0.push(*a),
+            Ok(UiAction::ToggleMode) => settings.mode = settings.mode.toggled(),
+            Ok(UiAction::BackToLobby) => next.set(AppState::Lobby),
+            Err(_) => {}
         }
     }
 }
 
-fn style_buttons(
-    mut buttons: Query<(&Interaction, &UiAction, &mut BackgroundColor, &Children)>,
-    mut labels: Query<&mut TextColor>,
-    net: Res<NetState>,
-) {
-    for (interaction, action, mut bg, children) in &mut buttons {
-        // Only the host adds and removes bots, or starts.
-        let on = match action {
-            UiAction::Lobby(LobbyAction::ToggleWatch)
-            | UiAction::ToggleWindow
-            | UiAction::BackToLobby => true,
-            UiAction::Lobby(_) => net.sequences(),
-        };
-        let fill = match (on, interaction) {
-            (false, _) => palette::CONTROL_OFF,
-            (true, Interaction::Pressed) => palette::CONTROL_PRESSED,
-            (true, Interaction::Hovered) => palette::CONTROL_HOVER,
-            (true, Interaction::None) => palette::CONTROL_IDLE,
-        };
-        bg.set_if_neq(BackgroundColor(fill));
-        let ink = if on { palette::TEXT } else { palette::FAINT };
-        for c in children.iter() {
-            if let Ok(mut color) = labels.get_mut(c) {
-                color.set_if_neq(TextColor(ink));
-            }
-        }
-    }
+/// The mode segment's title and detail: the mode now, and what it switches
+/// to.
+fn mode_labels(settings: &Settings) -> (String, String) {
+    let now = settings.mode;
+    (
+        capitalised(now.name()),
+        format!("switch to {}", now.toggled().name()),
+    )
 }
 
 // ---- Lobby -----------------------------------------------------------------
 
-fn spawn_lobby(mut commands: Commands) {
+fn spawn_lobby(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    fills: Res<SegmentFills>,
+    settings: Res<Settings>,
+) {
     let c = &mut commands;
+    // The title and the tagline follow the top of the circle.
+    for (text, radius, size, color) in [
+        ("CAKE", 300.0, 40.0, palette::TEXT),
+        (
+            "A ring, some neighbours, and promises.",
+            262.0,
+            15.0,
+            palette::DIM_TEXT,
+        ),
+    ] {
+        c.spawn((
+            ArcText {
+                text: text.into(),
+                angle: std::f32::consts::FRAC_PI_2,
+                frame: Frame::Screen,
+                radius,
+                size,
+                color,
+            },
+            DespawnOnExit(AppState::Lobby),
+        ));
+    }
     let b = circle_box(c, AppState::Lobby);
-    text(c, b, place(0.0, 255.0, 400.0, 44.0), "CAKE", 38.0, palette::TEXT);
-    let tagline = "A ring, some neighbours, and promises.";
-    text(c, b, place(0.0, 214.0, 520.0, 22.0), tagline, 15.0, palette::DIM_TEXT);
-    text(c, b, place(0.0, 160.0, 600.0, 56.0), "", 15.0, palette::TEXT).insert(LobbyInfo);
-    text(c, b, place(0.0, 40.0, 460.0, 180.0), "", 16.0, palette::DIM_TEXT).insert(LobbyRoster);
-    text(c, b, place(0.0, -72.0, 560.0, 22.0), "", 14.0, palette::BAD).insert(LobbyStatus);
-    for (i, (label, action)) in [
-        ("Add bot", LobbyAction::AddBot),
-        ("Remove bot", LobbyAction::RemoveBot),
-        ("Watch/Play", LobbyAction::ToggleWatch),
-        ("Start", LobbyAction::Start),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let x = -189.0 + 126.0 * i as f32;
-        button(c, b, place(x, -125.0, 118.0, 42.0), label, UiAction::Lobby(action));
+    text(
+        c,
+        b,
+        place(0.0, 150.0, 600.0, 56.0),
+        "",
+        15.0,
+        palette::TEXT,
+    )
+    .insert(LobbyInfo);
+    text(
+        c,
+        b,
+        place(0.0, 30.0, 460.0, 150.0),
+        "",
+        16.0,
+        palette::DIM_TEXT,
+    )
+    .insert(LobbyRoster);
+    text(c, b, place(0.0, -80.0, 560.0, 22.0), "", 14.0, palette::BAD).insert(LobbyStatus);
+    let keys = "Keys: B add bot   X remove   W watch/play   Enter start";
+    text(
+        c,
+        b,
+        place(0.0, -215.0, 520.0, 20.0),
+        keys,
+        13.0,
+        palette::DIM_TEXT,
+    );
+
+    let row = [
+        ("Add bot", "B", LobbyAction::AddBot),
+        ("Remove bot", "X", LobbyAction::RemoveBot),
+        ("Watch/Play", "W", LobbyAction::ToggleWatch),
+        ("Start", "Enter", LobbyAction::Start),
+    ];
+    for (i, (title, key, action)) in row.iter().enumerate() {
+        segments::spawn(
+            c,
+            &mut meshes,
+            &fills,
+            LOBBY_ROW,
+            i,
+            row.len(),
+            title,
+            key,
+            AppState::Lobby,
+            UiAction::Lobby(*action),
+        );
     }
     if settings::cake_supported() {
-        let node = place(0.0, -185.0, 400.0, 36.0);
-        let (_, label) = button(c, b, node, "", UiAction::ToggleWindow);
-        c.entity(label).insert(StyleLabel);
+        let (title, detail) = mode_labels(&settings);
+        segments::spawn(
+            c,
+            &mut meshes,
+            &fills,
+            TOP_SLOT,
+            0,
+            1,
+            &title,
+            &detail,
+            AppState::Lobby,
+            UiAction::ToggleMode,
+        );
     }
-    let keys = "Keys: B add bot   X remove   W watch/play   Enter start";
-    text(c, b, place(0.0, -240.0, 520.0, 20.0), keys, 13.0, palette::DIM_TEXT);
 }
 
 fn lobby_keys(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<LobbyInput>) {
@@ -296,18 +326,41 @@ fn lobby_keys(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<LobbyInput>) {
     }
 }
 
+/// Only the host adds and removes bots, or starts; and the mode segment
+/// names the mode.
+fn enable_lobby(
+    net: Res<NetState>,
+    settings: Res<Settings>,
+    mut buttons: Query<(Entity, &UiAction, &mut Segment)>,
+    mut labels: Query<(&SegmentLabel, &mut ArcText)>,
+) {
+    for (e, action, mut segment) in &mut buttons {
+        let on = match action {
+            UiAction::Lobby(LobbyAction::AddBot | LobbyAction::RemoveBot | LobbyAction::Start) => {
+                net.sequences()
+            }
+            _ => true,
+        };
+        if segment.enabled != on {
+            segment.enabled = on;
+        }
+        if *action == UiAction::ToggleMode && settings.is_changed() {
+            let (title, detail) = mode_labels(&settings);
+            segments::relabel(&mut labels, e, &title, &detail);
+        }
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn update_lobby(
     net: Res<NetState>,
     room: Option<Res<RoomId>>,
     lobby: Res<Lobby>,
-    settings: Res<Settings>,
     socket: Option<Res<MatchboxSocket>>,
     mut texts: ParamSet<(
         Single<&mut Text, With<LobbyInfo>>,
         Single<&mut Text, With<LobbyStatus>>,
         Single<&mut Text, With<LobbyRoster>>,
-        Option<Single<&mut Text, With<StyleLabel>>>,
     )>,
 ) {
     let room = room.map_or_else(|| "...".to_string(), |r| r.0.clone());
@@ -329,11 +382,6 @@ fn update_lobby(
     if texts.p1().0 != lobby.status {
         texts.p1().0.clone_from(&lobby.status);
     }
-    if let Some(mut label) = texts.p3() {
-        let now = settings.mode;
-        let text = format!("{}  (switch to {})", capitalised(now.name()), now.toggled().name());
-        label.set_if_neq(Text(text));
-    }
 
     // Players are shown on the ring (see `lobby_ring`); watchers are listed
     // here.
@@ -347,7 +395,9 @@ fn update_lobby(
             .collect();
         let seats = lobby.players().count();
         if seats > 0 {
-            lines.push(format!("{seats} on the ring - seats are shuffled at the start"));
+            lines.push(format!(
+                "{seats} on the ring - seats are shuffled at the start"
+            ));
         }
         texts.p2().set_if_neq(Text(lines.join("\n")));
     }
@@ -358,14 +408,43 @@ fn update_lobby(
 fn spawn_game(mut commands: Commands) {
     let c = &mut commands;
     let b = circle_box(c, AppState::Game);
-    text(c, b, place(0.0, 185.0, 620.0, 64.0), "", 24.0, palette::TEXT).insert(BannerText);
-    let back = place(0.0, 125.0, 210.0, 38.0);
-    let (back, _) = button(c, b, back, "Back to the lobby", UiAction::BackToLobby);
-    c.entity(back).insert((BackButton, Visibility::Hidden));
+    text(
+        c,
+        b,
+        place(0.0, 185.0, 620.0, 64.0),
+        "",
+        24.0,
+        palette::TEXT,
+    )
+    .insert(BannerText);
     text(c, b, place(0.0, 62.0, 600.0, 26.0), "", 20.0, palette::TEXT).insert(EconomyText);
-    text(c, b, place(0.0, 32.0, 600.0, 20.0), "", 14.0, palette::DIM_TEXT).insert(QueueText);
-    text(c, b, place(0.0, -18.0, 620.0, 22.0), "", 15.0, palette::TEXT).insert(SelectionText);
-    text(c, b, place(0.0, -198.0, 560.0, 40.0), "", 13.0, palette::DIM_TEXT).insert(HintText);
+    text(
+        c,
+        b,
+        place(0.0, 32.0, 600.0, 20.0),
+        "",
+        14.0,
+        palette::DIM_TEXT,
+    )
+    .insert(QueueText);
+    text(
+        c,
+        b,
+        place(0.0, -18.0, 620.0, 22.0),
+        "",
+        15.0,
+        palette::TEXT,
+    )
+    .insert(SelectionText);
+    text(
+        c,
+        b,
+        place(0.0, -198.0, 560.0, 40.0),
+        "",
+        13.0,
+        palette::DIM_TEXT,
+    )
+    .insert(HintText);
 }
 
 fn spawn_labels(mut commands: Commands, m: Res<Match>) {
@@ -382,11 +461,10 @@ fn spawn_labels(mut commands: Commands, m: Res<Match>) {
 
 /// Names along their sectors, dimmed once a player is out.
 fn update_labels(m: Res<Match>, mut labels: Query<(&SeatLabel, &mut ArcText)>) {
-    let my_key = m
-        .me
-        .and_then(|s| m.players.get(s as usize))
-        .and_then(|p| p.peer.clone())
-        .unwrap_or_default();
+    let my_key =
+        m.me.and_then(|s| m.players.get(s as usize))
+            .and_then(|p| p.peer.clone())
+            .unwrap_or_default();
     for (label, mut arc) in &mut labels {
         let seat = label.0;
         let Some(member) = m.players.get(seat as usize) else {
@@ -404,7 +482,11 @@ fn update_labels(m: Res<Match>, mut labels: Query<(&SeatLabel, &mut ArcText)>) {
     }
 }
 
-fn game_keys(keys: Res<ButtonInput<KeyCode>>, m: Res<Match>, mut next: ResMut<NextState<AppState>>) {
+fn game_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    m: Res<Match>,
+    mut next: ResMut<NextState<AppState>>,
+) {
     let over = m.sim.outcome.is_some() || m.host_left;
     if over && (keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter)) {
         next.set(AppState::Lobby);
@@ -418,7 +500,7 @@ fn queue_line(m: &Match, seat: Seat) -> String {
     let Some(front) = p.queue.front() else {
         return "HQ idle".into();
     };
-    let pct = p.progress * 100 / front.stats().build_ticks.max(1);
+    let pct = (p.progress / front.stats().build_ticks.max(1)).min(100);
     let rest: Vec<&str> = p.queue.iter().skip(1).map(|k| k.name()).collect();
     if rest.is_empty() {
         format!("Building {} {pct}%", front.name())
@@ -456,12 +538,16 @@ fn selection_line(m: &Match, sel: &Selection) -> String {
         .join("   ")
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn update_game(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    fills: Res<SegmentFills>,
     m: Res<Match>,
     sel: Res<Selection>,
     mode: Res<Mode>,
-    mut back: Single<&mut Visibility, With<BackButton>>,
+    caption: Option<Res<Caption>>,
+    back: Query<(), With<UiAction>>,
     mut texts: ParamSet<(
         Single<&mut Text, With<EconomyText>>,
         Single<&mut Text, With<QueueText>>,
@@ -471,16 +557,20 @@ fn update_game(
     )>,
 ) {
     let sim = &m.sim;
+    // Once it is decided, the middle belongs to the recap.
+    let recap = sim.outcome.is_some();
     let mine = m.me.and_then(|me| sim.player(me).map(|p| (me, p)));
     let (economy, queue) = match mine {
+        _ if recap => (String::new(), String::new()),
         Some((me, p)) if p.alive => {
             let income = sim.income(me) * TICK_HZ as i64;
             (
                 format!(
-                    "Supply {}    +{}.{}/s    Units {}/{}",
+                    "Supply {}    +{}.{}/s    Pace {}%    Units {}/{}",
                     p.supply / SUPPLY,
                     income / SUPPLY,
                     (income % SUPPLY) / 100,
+                    sim.production_pct(me),
                     sim.unit_count(me),
                     stats::UNIT_CAP,
                 ),
@@ -488,13 +578,23 @@ fn update_game(
             )
         }
         Some(_) => ("Eliminated".into(), "You can keep watching.".into()),
-        None => ("Watching".into(), String::new()),
+        None => match &caption {
+            Some(c) => (c.0.clone(), String::new()),
+            None => ("Watching".into(), String::new()),
+        },
     };
     texts.p0().set_if_neq(Text(economy));
     texts.p1().set_if_neq(Text(queue));
-    texts.p2().set_if_neq(Text(selection_line(&m, &sel)));
+    let selection = if recap {
+        String::new()
+    } else {
+        selection_line(&m, &sel)
+    };
+    texts.p2().set_if_neq(Text(selection));
 
-    let hint = if *mode != Mode::Normal {
+    let hint = if recap || caption.is_some() {
+        String::new()
+    } else if *mode != Mode::Normal {
         format!("{}   [Esc] cancel", mode.hint())
     } else {
         "Drag or click to select. Right-click: move, attack, repair, rally.\n\
@@ -506,21 +606,26 @@ fn update_game(
     let over = sim.outcome.is_some() || m.host_left;
     let banner = if let Some(tick) = m.desync {
         format!("DESYNC at tick {tick}\nthis match no longer agrees between peers")
-    } else if m.host_left {
+    } else if m.host_left && !recap {
         "The host left.".into()
     } else {
-        match sim.outcome {
-            Some(Outcome::Winner(w)) if Some(w) == m.me => "Victory!".into(),
-            Some(Outcome::Winner(w)) => format!("{} holds the ring.", m.players[w as usize].name),
-            Some(Outcome::Draw) => "Nobody is left.".into(),
-            None => String::new(),
-        }
+        String::new()
     };
     texts.p4().set_if_neq(Text(banner));
 
-    back.set_if_neq(if over {
-        Visibility::Inherited
-    } else {
-        Visibility::Hidden
-    });
+    // Once it is over, the way back: at the top of the inner ring.
+    if over && back.is_empty() {
+        segments::spawn(
+            &mut commands,
+            &mut meshes,
+            &fills,
+            TOP_SLOT,
+            0,
+            1,
+            "Back to the lobby",
+            "Enter",
+            AppState::Game,
+            UiAction::BackToLobby,
+        );
+    }
 }

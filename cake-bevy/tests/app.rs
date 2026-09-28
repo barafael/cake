@@ -18,21 +18,28 @@ fn offline_solo_play_boots_into_a_match_against_bots() {
     app.add_plugins((MinimalPlugins, StatesPlugin))
         .insert_resource(Signaling("ws://127.0.0.1:9".into()))
         .add_plugins(logic_plugin);
-    assert!(app.world().contains_resource::<RoomId>(), "a room is chosen at build time");
+    assert!(
+        app.world().contains_resource::<RoomId>(),
+        "a room is chosen at build time"
+    );
 
     for _ in 0..5 {
         app.update();
     }
     assert_eq!(app.world().resource::<Lobby>().members.len(), 1, "just me");
 
-    app.world_mut()
-        .resource_mut::<LobbyInput>()
-        .0
-        .extend([LobbyAction::AddBot, LobbyAction::AddBot, LobbyAction::Start]);
+    app.world_mut().resource_mut::<LobbyInput>().0.extend([
+        LobbyAction::AddBot,
+        LobbyAction::AddBot,
+        LobbyAction::Start,
+    ]);
     for _ in 0..5 {
         app.update();
     }
-    assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Game);
+    assert_eq!(
+        *app.world().resource::<State<AppState>>().get(),
+        AppState::Game
+    );
 
     for _ in 0..30 {
         app.update();

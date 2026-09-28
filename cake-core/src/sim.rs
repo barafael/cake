@@ -11,11 +11,12 @@ use std::collections::VecDeque;
 use serde::{Deserialize, Serialize};
 
 use crate::command::{Command, MAX_UNITS_PER_COMMAND, PlaceError};
-use crate::geom::{Pos, R_MID, UNIT, scaled, sector_center};
-use crate::stats::{self, Kind};
+use crate::geom::{Pos, R_MID, UNIT, isqrt, scaled, sector_center};
+use crate::stats::{self, Kind, Shot};
 
 pub type EntityId = u32;
-/// A player's index around the ring: seat `i` owns sector `i`.
+/// A player's index around the ring: seat `i` starts in sector `i`. Sectors
+/// are only a starting layout; nothing here keeps anyone in theirs.
 pub type Seat = u8;
 
 pub const MAX_SEATS: usize = 8;
@@ -35,7 +36,8 @@ pub enum Order {
     Move(Pos),
     AttackMove(Pos),
     Attack(EntityId),
-    Build(Pos),
+    /// Build a turret of this kind there.
+    Build(Pos, Kind),
     Repair(EntityId),
     Deploy(Pos),
 }
@@ -58,6 +60,9 @@ pub struct Entity {
     /// Presentation: which way the entity faces, in its local
     /// `(tangential, radial)` frame, scaled to 1000.
     pub facing: (i64, i64),
+    /// Being thrown by a blast: milli-units per tick in the local
+    /// `(tangential, radial)` frame, fading each tick.
+    pub push: (i64, i64),
     /// Bit `s` is set when seat `s` can see this entity (its owner always
     /// can). Refreshed every tick.
     pub seen_by: u8,
@@ -95,7 +100,9 @@ pub struct Player {
     pub alive: bool,
     pub supply: i64,
     pub queue: VecDeque<Kind>,
-    /// Ticks spent on the front of the queue.
+    /// Work done on the front of the queue, in hundredths of a tick at the
+    /// base pace: it is done at `build_ticks * 100` (see
+    /// [`Sim::production_pct`]).
     pub progress: u32,
     pub rally: Pos,
     pub hq: EntityId,
@@ -128,7 +135,41 @@ pub enum Event {
         kind: Kind,
         pos: Pos,
     },
+    /// A projectile arrived: a bullet or missile hit, or plasma burst.
+    Impact {
+        at: Pos,
+        owner: Seat,
+        /// Who fired it.
+        kind: Kind,
+        target: Option<EntityId>,
+    },
+    /// A building exploded, throwing units back within `radius`.
+    Blast {
+        at: Pos,
+        owner: Seat,
+        radius: i64,
+    },
     Eliminated(Seat),
+}
+
+/// Something in flight between a shooter and its target.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Projectile {
+    pub owner: Seat,
+    /// What fired it: damage multipliers are the shooter's.
+    pub shooter: Kind,
+    pub shot: Shot,
+    pub pos: Pos,
+    /// Where it was a tick ago, for drawing it between ticks.
+    pub prev: Pos,
+    pub target: EntityId,
+    /// Where it is headed: the target, while it lives (for plasma, where the
+    /// target was when it was fired).
+    pub aim: Pos,
+    /// Missiles: heading, in milli-units per tick in the local frame.
+    pub vel: (i64, i64),
+    pub damage: i32,
+    pub age: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -138,6 +179,8 @@ pub struct Sim {
     /// In id order: see [`Sim::get`].
     pub entities: Vec<Entity>,
     next_id: EntityId,
+    /// In firing order.
+    pub projectiles: Vec<Projectile>,
     pub outcome: Option<Outcome>,
     #[serde(skip)]
     pub events: Vec<Event>,
@@ -158,7 +201,7 @@ struct Decision {
 enum Effect {
     None,
     Repair(EntityId),
-    LayTurret(Pos),
+    LayTurret(Pos, Kind),
     DeployTick(Pos),
 }
 
@@ -175,6 +218,7 @@ impl Sim {
             players: Vec::with_capacity(seats),
             entities: Vec::new(),
             next_id: 0,
+            projectiles: Vec::new(),
             outcome: None,
             events: Vec::new(),
         };
@@ -189,7 +233,12 @@ impl Sim {
                 rally: at,
                 hq,
             });
-            sim.spawn(seat as Seat, Kind::Utility, at.displaced(0, -40 * UNIT), true);
+            sim.spawn(
+                seat as Seat,
+                Kind::Utility,
+                at.displaced(0, -40 * UNIT),
+                true,
+            );
         }
         sim
     }
@@ -222,17 +271,25 @@ impl Sim {
         self.player(seat).is_some_and(|p| p.alive)
     }
 
+    /// `seat`'s finished economy buildings.
+    fn econ_count(&self, seat: Seat) -> usize {
+        self.entities
+            .iter()
+            .filter(|e| e.owner == seat && e.kind == Kind::Econ && e.complete)
+            .count()
+    }
+
     /// Supply income per tick for `seat`, in milli-supply.
     pub fn income(&self, seat: Seat) -> i64 {
         if !self.is_alive(seat) {
             return 0;
         }
-        let econ = self
-            .entities
-            .iter()
-            .filter(|e| e.owner == seat && e.kind == Kind::Econ && e.complete)
-            .count() as i64;
-        stats::HQ_INCOME + econ * stats::ECON_INCOME
+        stats::HQ_INCOME + self.econ_count(seat) as i64 * stats::ECON_INCOME
+    }
+
+    /// How fast `seat`'s HQ builds, in percent of the base pace.
+    pub fn production_pct(&self, seat: Seat) -> u32 {
+        100 + self.econ_count(seat) as u32 * stats::ECON_PRODUCTION_PCT
     }
 
     pub fn unit_count(&self, seat: Seat) -> usize {
@@ -256,10 +313,11 @@ impl Sim {
         self.structure_site(seat, at, stats::ECON.radius)
     }
 
-    /// Can `seat` put a turret at `at`? `at` is first pulled inside the band.
-    pub fn turret_site(&self, seat: Seat, at: Pos) -> Result<Pos, PlaceError> {
-        let at = at.inset(stats::TURRET.radius);
-        self.structure_site(seat, at, stats::TURRET.radius)
+    /// Can `seat` put a turret of `kind` at `at`? `at` is first pulled
+    /// inside the band.
+    pub fn turret_site(&self, seat: Seat, at: Pos, kind: Kind) -> Result<Pos, PlaceError> {
+        let radius = kind.stats().radius;
+        self.structure_site(seat, at.inset(radius), radius)
     }
 
     fn structure_site(&self, seat: Seat, at: Pos, radius: i64) -> Result<Pos, PlaceError> {
@@ -289,6 +347,7 @@ impl Sim {
             self.production();
             self.vision();
             self.act();
+            self.drift();
             self.separate();
             self.combat();
             self.cleanup();
@@ -324,6 +383,7 @@ impl Sim {
             progress: 0,
             complete,
             facing: (0, -1000),
+            push: (0, 0),
             seen_by: 1 << owner,
             stall: 0,
             last_goal_d: i64::MAX,
@@ -378,9 +438,11 @@ impl Sim {
                     self.give(i, Order::Idle);
                 }
             }
-            Command::Build { unit, at } => {
-                if let Some(i) = self.own_utility(seat, *unit) {
-                    self.give(i, Order::Build(at.inset(stats::TURRET.radius)));
+            Command::Build { unit, at, kind } => {
+                if kind.is_turret()
+                    && let Some(i) = self.own_utility(seat, *unit)
+                {
+                    self.give(i, Order::Build(at.inset(kind.stats().radius), *kind));
                 }
             }
             Command::Deploy { unit, at } => {
@@ -480,8 +542,8 @@ impl Sim {
             let Some(&kind) = p.queue.front() else {
                 continue;
             };
-            if p.progress < kind.stats().build_ticks {
-                self.players[seat].progress += 1;
+            if p.progress < kind.stats().build_ticks * 100 {
+                self.players[seat].progress += self.production_pct(s);
                 continue;
             }
             if self.unit_count(s) >= stats::UNIT_CAP {
@@ -525,7 +587,10 @@ impl Sim {
                 if *seen_i & bit != 0 {
                     continue;
                 }
-                if viewer.pos.within(target.pos, viewer.stats().vision + target.radius()) {
+                if viewer
+                    .pos
+                    .within(target.pos, viewer.stats().vision + target.radius())
+                {
                     *seen_i |= bit;
                 }
             }
@@ -541,9 +606,7 @@ impl Sim {
     /// its current one if still valid, otherwise the nearest visible enemy.
     fn engage(&self, e: &Entity, range: i64) -> Option<EntityId> {
         let valid = |t: &Entity| {
-            t.owner != e.owner
-                && t.seen_by_seat(e.owner)
-                && e.pos.within(t.pos, range + t.radius())
+            t.owner != e.owner && t.seen_by_seat(e.owner) && e.pos.within(t.pos, range + t.radius())
         };
         if let Some(t) = e.target.and_then(|id| self.get(id))
             && valid(t)
@@ -608,9 +671,9 @@ impl Sim {
                 Some(t) if t.owner != e.owner && t.seen_by_seat(e.owner) => chase(&mut d, target),
                 _ => d.order = Order::Idle,
             },
-            Order::Build(at) => {
+            Order::Build(at, kind) => {
                 if e.pos.within(at, stats::BUILD_RANGE) {
-                    d.effect = Effect::LayTurret(at);
+                    d.effect = Effect::LayTurret(at, kind);
                 } else {
                     d.goal = Some((at, stats::BUILD_RANGE - UNIT));
                 }
@@ -691,7 +754,7 @@ impl Sim {
             match d.effect {
                 Effect::None => {}
                 Effect::Repair(target) => self.repair(target),
-                Effect::LayTurret(at) => self.lay_turret(i, at),
+                Effect::LayTurret(at, kind) => self.lay_turret(i, at, kind),
                 Effect::DeployTick(at) => self.deploy_tick(i, at),
             }
         }
@@ -724,15 +787,15 @@ impl Sim {
         }
     }
 
-    fn lay_turret(&mut self, builder: usize, at: Pos) {
+    fn lay_turret(&mut self, builder: usize, at: Pos, kind: Kind) {
         let owner = self.entities[builder].owner;
-        let cost = stats::TURRET.cost;
-        let site = self.turret_site(owner, at);
+        let cost = kind.stats().cost;
+        let site = self.turret_site(owner, at, kind);
         let p = &mut self.players[owner as usize];
         let order = match site {
             Ok(at) if p.supply >= cost => {
                 p.supply -= cost;
-                Order::Repair(self.spawn(owner, Kind::Turret, at, false))
+                Order::Repair(self.spawn(owner, kind, at, false))
             }
             _ => Order::Idle,
         };
@@ -789,7 +852,11 @@ impl Sim {
                 let d = crate::geom::isqrt(t * t + r * r);
                 let overlap = min - d;
                 // Coincident bodies part along the ring, by id.
-                let (ux, uy) = if d == 0 { (1000, 0) } else { scaled(t, r, 1000) };
+                let (ux, uy) = if d == 0 {
+                    (1000, 0)
+                } else {
+                    scaled(t, r, 1000)
+                };
                 let (share_a, share_b) = match (a.kind.is_mobile(), b.kind.is_mobile()) {
                     (true, true) => (overlap / 2, overlap - overlap / 2),
                     (true, false) => (overlap, 0),
@@ -828,38 +895,183 @@ impl Sim {
             if !e.pos.within(target.pos, weapon.range + target.radius()) {
                 continue;
             }
-            let damage = weapon.damage * stats::damage_pct(e.kind, target.kind) / 100;
-            hits.push((t, damage));
             self.events.push(Event::Shot {
                 from: e.pos,
                 to: target.pos,
                 owner: e.owner,
                 kind: e.kind,
             });
+            if weapon.shot == Shot::Melee {
+                let damage = weapon.damage * stats::damage_pct(e.kind, target.kind) / 100;
+                hits.push((t, damage));
+            } else {
+                let projectile = launch(e, target, weapon, self.projectiles.len());
+                self.projectiles.push(projectile);
+            }
             self.entities[i].cooldown = weapon.cooldown;
         }
+        self.fly(&mut hits);
         for (t, damage) in hits {
             self.entities[t].hp -= damage;
         }
     }
 
+    /// Move everything in flight, and collect what lands.
+    fn fly(&mut self, hits: &mut Vec<(usize, i32)>) {
+        let mut landed = Vec::new();
+        for (n, p) in self.projectiles.iter_mut().enumerate() {
+            p.prev = p.pos;
+            p.age += 1;
+            let target = self
+                .entities
+                .binary_search_by_key(&p.target, |e| e.id)
+                .ok()
+                .map(|i| &self.entities[i]);
+            // Whether it arrived, and whether that was on its target.
+            let (arrived, on_target) = match p.shot {
+                Shot::Melee => (true, true),
+                Shot::Bullet { speed } => {
+                    if let Some(t) = target {
+                        p.aim = t.pos;
+                    }
+                    let (pos, arrived) = p.pos.step_toward(p.aim, speed);
+                    p.pos = pos;
+                    (arrived, true)
+                }
+                Shot::Plasma { speed, .. } => {
+                    let (pos, arrived) = p.pos.step_toward(p.aim, speed);
+                    p.pos = pos;
+                    (arrived, true)
+                }
+                Shot::Missile { speed, turn } => {
+                    if let Some(t) = target {
+                        p.aim = t.pos;
+                    }
+                    // Steer part of the way toward the target, at full speed.
+                    let (dt, dr) = p.pos.offset_to(p.aim);
+                    let want = scaled(dt, dr, speed);
+                    let steered = (
+                        p.vel.0 + (want.0 - p.vel.0) * turn / 1000,
+                        p.vel.1 + (want.1 - p.vel.1) * turn / 1000,
+                    );
+                    p.vel = scaled(steered.0, steered.1, speed);
+                    p.pos = p.pos.displaced(p.vel.0, p.vel.1);
+                    let reach = speed + target.map_or(0, |t| t.radius());
+                    let hit = p.pos.within(p.aim, reach);
+                    // Out of fuel, it bursts where it is, harmlessly.
+                    (hit || p.age >= stats::MISSILE_FUEL, hit)
+                }
+            };
+            if arrived {
+                landed.push((n, on_target));
+            }
+        }
+        for &(n, on_target) in &landed {
+            let p = &self.projectiles[n];
+            let target = self.index_of(p.target);
+            match p.shot {
+                Shot::Plasma { splash, .. } => {
+                    // Everything of the enemy's in the burst: full strength
+                    // in the middle, half at the edge.
+                    for (i, e) in self.entities.iter().enumerate() {
+                        if e.owner == p.owner {
+                            continue;
+                        }
+                        let reach = splash + e.radius();
+                        if !p.aim.within(e.pos, reach) {
+                            continue;
+                        }
+                        let d = p.aim.dist(e.pos);
+                        let pct = 100 - 50 * d.min(reach) / reach.max(1);
+                        let damage = p.damage * stats::damage_pct(p.shooter, e.kind) / 100;
+                        hits.push((i, damage * pct as i32 / 100));
+                    }
+                }
+                _ => {
+                    if let Some(t) = target.filter(|_| on_target) {
+                        let e = &self.entities[t];
+                        hits.push((t, p.damage * stats::damage_pct(p.shooter, e.kind) / 100));
+                    }
+                }
+            }
+            self.events.push(Event::Impact {
+                at: p.pos,
+                owner: p.owner,
+                kind: p.shooter,
+                target: target.map(|t| self.entities[t].id),
+            });
+        }
+        let mut n = 0;
+        self.projectiles.retain(|_| {
+            let keep = !landed.iter().any(|(l, _)| *l == n);
+            n += 1;
+            keep
+        });
+    }
+
+    /// Units thrown by blasts slide, slowing as they go.
+    fn drift(&mut self) {
+        for e in &mut self.entities {
+            if e.push == (0, 0) {
+                continue;
+            }
+            e.pos = e.pos.displaced(e.push.0, e.push.1).inset(e.radius());
+            e.push = (e.push.0 * 3 / 4, e.push.1 * 3 / 4);
+            if e.push.0.abs() + e.push.1.abs() < UNIT / 10 {
+                e.push = (0, 0);
+            }
+        }
+    }
+
+    /// A building exploding at `at`: every mobile unit within its blast is
+    /// thrown away from it, harder the closer it stood and the lighter it is.
+    fn blast(&mut self, at: Pos, owner: Seat, blast: &stats::Blast) {
+        for e in &mut self.entities {
+            let mass = e.stats().mass;
+            if mass == 0 || e.hp <= 0 || !at.within(e.pos, blast.radius) {
+                continue;
+            }
+            let (t, r) = at.offset_to(e.pos);
+            let d = isqrt(t * t + r * r);
+            let (ux, uy) = if d == 0 {
+                (1000, 0)
+            } else {
+                scaled(t, r, 1000)
+            };
+            let strength = blast.force * (blast.radius - d) / blast.radius / mass;
+            e.push.0 += ux * strength / 1000;
+            e.push.1 += uy * strength / 1000;
+        }
+        self.events.push(Event::Blast {
+            at,
+            owner,
+            radius: blast.radius,
+        });
+    }
+
     // ---- Deaths, elimination, victory ------------------------------------
 
     fn cleanup(&mut self) {
-        let mut fallen: Vec<Seat> = Vec::new();
+        let fallen: Vec<Seat> = self
+            .entities
+            .iter()
+            .filter(|e| e.hp <= 0 && e.kind == Kind::Hq)
+            .map(|e| e.owner)
+            .collect();
+        // The dead, and everything a fallen player owned, go out with a bang.
+        let mut blasts = Vec::new();
         for e in &self.entities {
-            if e.hp > 0 {
+            let dies = e.hp <= 0 || fallen.contains(&e.owner);
+            if !dies || e.consumed {
                 continue;
             }
-            if !e.consumed {
-                self.events.push(Event::Died {
-                    owner: e.owner,
-                    kind: e.kind,
-                    pos: e.pos,
-                });
-            }
-            if e.kind == Kind::Hq {
-                fallen.push(e.owner);
+            self.events.push(Event::Died {
+                owner: e.owner,
+                kind: e.kind,
+                pos: e.pos,
+            });
+            if let Some(blast) = &e.stats().blast {
+                blasts.push((e.pos, e.owner, blast));
             }
         }
         for &seat in &fallen {
@@ -871,6 +1083,9 @@ impl Sim {
         }
         self.entities
             .retain(|e| e.hp > 0 && !fallen.contains(&e.owner));
+        for (at, owner, blast) in blasts {
+            self.blast(at, owner, blast);
+        }
 
         if !fallen.is_empty() && self.seats() > 1 {
             let alive: Vec<Seat> = (0..self.seats() as Seat)
@@ -882,5 +1097,33 @@ impl Sim {
                 _ => None,
             };
         }
+    }
+}
+
+/// A projectile leaving `from` for `target`. Missiles set off sideways,
+/// alternately to either side, and curve in.
+fn launch(from: &Entity, target: &Entity, weapon: &stats::Weapon, count: usize) -> Projectile {
+    let (dt, dr) = from.pos.offset_to(target.pos);
+    let vel = match weapon.shot {
+        Shot::Missile { speed, .. } => {
+            let (ux, uy) = scaled(dt, dr, 1000);
+            // Turned about 70 degrees off the line to the target.
+            let (c, s) = (342, if count.is_multiple_of(2) { 940 } else { -940 });
+            let side = ((ux * c - uy * s) / 1000, (ux * s + uy * c) / 1000);
+            scaled(side.0, side.1, speed)
+        }
+        _ => (0, 0),
+    };
+    Projectile {
+        owner: from.owner,
+        shooter: from.kind,
+        shot: weapon.shot,
+        pos: from.pos,
+        prev: from.pos,
+        target: target.id,
+        aim: target.pos,
+        vel,
+        damage: weapon.damage,
+        age: 0,
     }
 }

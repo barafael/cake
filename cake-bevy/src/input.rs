@@ -24,8 +24,8 @@ use cake_core::stats::{self, Kind, SUPPLY};
 use cake_core::{Command, EntityId, Pos};
 
 use crate::camera::Cursor;
-use crate::ringmesh;
 use crate::chrome::PointerBlocked;
+use crate::ringmesh;
 use crate::{AppState, Match};
 
 /// Pixels the pointer must travel before a click becomes a box.
@@ -45,17 +45,20 @@ pub enum Mode {
     #[default]
     Normal,
     AttackMove,
-    Build,
+    /// Lay down a turret of this kind.
+    Build(Kind),
     Deploy,
 }
 
 impl Mode {
-    pub fn hint(self) -> &'static str {
+    pub fn hint(self) -> String {
         match self {
-            Mode::Normal => "",
-            Mode::AttackMove => "Attack-move: left-click a destination",
-            Mode::Build => "Build turret: left-click a site",
-            Mode::Deploy => "Deploy economy building: left-click a site",
+            Mode::Normal => String::new(),
+            Mode::AttackMove => "Attack-move: left-click a destination".into(),
+            Mode::Build(kind) => {
+                format!("Build a {}: left-click a site", kind.name().to_lowercase())
+            }
+            Mode::Deploy => "Deploy economy building: left-click a site".into(),
         }
     }
 }
@@ -184,7 +187,7 @@ pub enum Act {
     Cancel,
     AttackMove,
     Stop,
-    Build,
+    Build(Kind),
     Deploy,
 }
 
@@ -198,7 +201,9 @@ impl Act {
             Act::Cancel => "X",
             Act::AttackMove => "A",
             Act::Stop => "S",
-            Act::Build => "B",
+            Act::Build(Kind::PlasmaTurret) => "N",
+            Act::Build(Kind::MissileTurret) => "M",
+            Act::Build(_) => "B",
             Act::Deploy => "D",
         }
     }
@@ -210,7 +215,9 @@ impl Act {
             Act::Cancel => "Cancel",
             Act::AttackMove => "Attack",
             Act::Stop => "Stop",
-            Act::Build => "Turret",
+            Act::Build(Kind::PlasmaTurret) => "Plasma",
+            Act::Build(Kind::MissileTurret) => "Missile",
+            Act::Build(_) => "Gun",
             Act::Deploy => "Deploy",
         }
     }
@@ -218,8 +225,9 @@ impl Act {
     /// Its key, and its price if it has one.
     pub fn detail(self) -> String {
         match self {
-            Act::Produce(kind) => format!("{}  {}", self.key(), kind.stats().cost / SUPPLY),
-            Act::Build => format!("{}  {}", self.key(), stats::TURRET.cost / SUPPLY),
+            Act::Produce(kind) | Act::Build(kind) => {
+                format!("{}  {}", self.key(), kind.stats().cost / SUPPLY)
+            }
             _ => self.key().to_string(),
         }
     }
@@ -233,12 +241,10 @@ impl Act {
             return false;
         };
         match self {
-            Act::Produce(kind) => {
-                p.supply >= kind.stats().cost && p.queue.len() < stats::QUEUE_MAX
-            }
+            Act::Produce(kind) => p.supply >= kind.stats().cost && p.queue.len() < stats::QUEUE_MAX,
             Act::Cancel => !p.queue.is_empty(),
             Act::AttackMove | Act::Stop => mine(m, sel).next().is_some(),
-            Act::Build | Act::Deploy => mine(m, sel).any(|e| e.kind == Kind::Utility),
+            Act::Build(_) | Act::Deploy => mine(m, sel).any(|e| e.kind == Kind::Utility),
         }
     }
 
@@ -255,7 +261,7 @@ impl Act {
                 let units = my_units(m, sel);
                 m.outbox.push(Command::Stop { units });
             }
-            Act::Build => *mode = Mode::Build,
+            Act::Build(kind) => *mode = Mode::Build(kind),
             Act::Deploy => *mode = Mode::Deploy,
         }
     }
@@ -299,7 +305,9 @@ fn keys(
         (KeyCode::KeyX, Act::Cancel),
         (KeyCode::KeyA, Act::AttackMove),
         (KeyCode::KeyS, Act::Stop),
-        (KeyCode::KeyB, Act::Build),
+        (KeyCode::KeyB, Act::Build(Kind::Turret)),
+        (KeyCode::KeyN, Act::Build(Kind::PlasmaTurret)),
+        (KeyCode::KeyM, Act::Build(Kind::MissileTurret)),
         (KeyCode::KeyD, Act::Deploy),
     ] {
         if keys.just_pressed(key) {
@@ -351,9 +359,9 @@ fn mouse(
                 m.outbox.push(Command::AttackMove { units, to: at });
                 true
             }
-            Mode::Build => {
+            Mode::Build(kind) => {
                 if let Some(unit) = nearest_utility(&m) {
-                    m.outbox.push(Command::Build { unit, at });
+                    m.outbox.push(Command::Build { unit, at, kind });
                 }
                 true
             }
@@ -409,11 +417,7 @@ fn mouse(
                 None if !shift => *sel = Selection::default(),
                 None => {}
             }
-            sel.hq = me.is_some_and(|me| {
-                m.sim
-                    .player(me)
-                    .is_some_and(|p| sel.ids.contains(&p.hq))
-            });
+            sel.hq = me.is_some_and(|me| m.sim.player(me).is_some_and(|p| sel.ids.contains(&p.hq)));
         }
     }
 
@@ -444,16 +448,21 @@ fn mouse(
                 units: utilities.clone(),
                 target: friend,
             });
-            let rest: Vec<EntityId> = units.into_iter().filter(|u| !utilities.contains(u)).collect();
+            let rest: Vec<EntityId> = units
+                .into_iter()
+                .filter(|u| !utilities.contains(u))
+                .collect();
             if !rest.is_empty() {
-                m.outbox.push(Command::Move { units: rest, to: at });
+                m.outbox.push(Command::Move {
+                    units: rest,
+                    to: at,
+                });
             }
             return;
         }
         m.outbox.push(Command::Move { units, to: at });
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -464,20 +473,35 @@ mod tests {
     fn a_polar_box_holds_what_lies_between_its_radii_and_arcs() {
         let b = PolarBox::spanning(Vec2::new(400.0, 0.0), Vec2::from_angle(FRAC_PI_2) * 480.0);
         assert!(b.contains(Vec2::from_angle(0.7) * 450.0));
-        assert!(!b.contains(Vec2::from_angle(0.7) * 350.0), "inside the inner arc");
-        assert!(!b.contains(Vec2::from_angle(-0.2) * 450.0), "before the first radius");
-        assert!(!b.contains(Vec2::from_angle(2.0) * 450.0), "past the second radius");
+        assert!(
+            !b.contains(Vec2::from_angle(0.7) * 350.0),
+            "inside the inner arc"
+        );
+        assert!(
+            !b.contains(Vec2::from_angle(-0.2) * 450.0),
+            "before the first radius"
+        );
+        assert!(
+            !b.contains(Vec2::from_angle(2.0) * 450.0),
+            "past the second radius"
+        );
     }
 
     #[test]
     fn a_polar_box_takes_the_short_way_round_either_way() {
         // Dragged clockwise across the seam at angle pi.
-        let b = PolarBox::spanning(Vec2::from_angle(PI - 0.2) * 450.0, Vec2::from_angle(-PI + 0.2) * 460.0);
+        let b = PolarBox::spanning(
+            Vec2::from_angle(PI - 0.2) * 450.0,
+            Vec2::from_angle(-PI + 0.2) * 460.0,
+        );
         assert!(b.sweep.abs() < 0.5, "{b:?}");
         assert!(b.contains(Vec2::from_angle(PI) * 455.0));
         assert!(!b.contains(Vec2::from_angle(0.0) * 455.0));
         // And the other way.
-        let c = PolarBox::spanning(Vec2::from_angle(0.3) * 450.0, Vec2::from_angle(-0.3) * 460.0);
+        let c = PolarBox::spanning(
+            Vec2::from_angle(0.3) * 450.0,
+            Vec2::from_angle(-0.3) * 460.0,
+        );
         assert!(c.sweep < 0.0);
         assert!(c.contains(Vec2::from_angle(0.0) * 455.0));
         assert!(!c.contains(Vec2::from_angle(PI) * 455.0));

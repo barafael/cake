@@ -118,7 +118,10 @@ fn units_walk_to_where_they_are_sent() {
 #[test]
 fn economy_buildings_respect_the_spacing_rule() {
     let sim = Sim::new(6);
-    assert!(sim.econ_site(0, beside_hq(&sim, 0, 100)).is_err(), "too close to the HQ");
+    assert!(
+        sim.econ_site(0, beside_hq(&sim, 0, 100)).is_err(),
+        "too close to the HQ"
+    );
     assert!(sim.econ_site(0, beside_hq(&sim, 0, 155)).is_ok());
 }
 
@@ -140,6 +143,35 @@ fn a_utility_deploys_into_an_economy_building_that_raises_income() {
 }
 
 #[test]
+fn economy_speeds_up_production() {
+    // Ticks until a queued raider walks out of the HQ.
+    let time_to_build = |sim: &mut Sim| {
+        let before = units_of(sim, 0, Kind::Raider).len();
+        sim.step(&[(0, Command::Produce(Kind::Raider))]);
+        let mut ticks = 1;
+        while units_of(sim, 0, Kind::Raider).len() == before {
+            sim.step(&[]);
+            ticks += 1;
+        }
+        ticks
+    };
+    let mut plain = Sim::new(6);
+    let base = time_to_build(&mut plain);
+
+    let mut sim = Sim::new(6);
+    let u = first_utility(&sim, 0);
+    let site = beside_hq(&sim, 0, 155);
+    sim.step(&[(0, Command::Deploy { unit: u, at: site })]);
+    run(&mut sim, 12 * TICK_HZ);
+    assert_eq!(sim.production_pct(0), 100 + stats::ECON_PRODUCTION_PCT);
+    let faster = time_to_build(&mut sim);
+
+    // 15% faster: 80 ticks of work take 70 instead.
+    assert_eq!(base, stats::RAIDER.build_ticks + 1);
+    assert_eq!(faster, stats::RAIDER.build_ticks * 100 / 115 + 2);
+}
+
+#[test]
 fn deploying_too_close_to_another_economy_building_fails() {
     let mut sim = Sim::new(6);
     let site = beside_hq(&sim, 0, 160);
@@ -156,10 +188,21 @@ fn a_utility_builds_a_turret_that_only_shoots_once_complete() {
     let mut sim = Sim::new(6);
     let u = first_utility(&sim, 0);
     let site = beside_hq(&sim, 0, 80);
-    sim.step(&[(0, Command::Build { unit: u, at: site })]);
+    sim.step(&[(
+        0,
+        Command::Build {
+            unit: u,
+            at: site,
+            kind: Kind::Turret,
+        },
+    )]);
     run(&mut sim, 4 * TICK_HZ);
     let turret = units_of(&sim, 0, Kind::Turret);
-    assert_eq!(turret.len(), 1, "the frame is laid once the utility arrives");
+    assert_eq!(
+        turret.len(),
+        1,
+        "the frame is laid once the utility arrives"
+    );
     let t = sim.get(turret[0]).unwrap();
     assert!(!t.complete);
     assert!(!t.armed());
@@ -168,7 +211,11 @@ fn a_utility_builds_a_turret_that_only_shoots_once_complete() {
     let t = sim.get(turret[0]).unwrap();
     assert!(t.complete);
     assert_eq!(t.hp, t.max_hp());
-    assert_eq!(sim.get(u).unwrap().order, Order::Idle, "the builder is released");
+    assert_eq!(
+        sim.get(u).unwrap().order,
+        Order::Idle,
+        "the builder is released"
+    );
 }
 
 #[test]
@@ -211,8 +258,20 @@ fn fight(a: Kind, b: Kind, budget: i64) -> (usize, usize) {
     let west = mid.displaced(-100 * UNIT, 0);
     let east = mid.displaced(100 * UNIT, 0);
     sim.step(&[
-        (0, Command::AttackMove { units: ours.clone(), to: east }),
-        (1, Command::AttackMove { units: theirs.clone(), to: west }),
+        (
+            0,
+            Command::AttackMove {
+                units: ours.clone(),
+                to: east,
+            },
+        ),
+        (
+            1,
+            Command::AttackMove {
+                units: theirs.clone(),
+                to: west,
+            },
+        ),
     ]);
     for _ in 0..90 * TICK_HZ {
         sim.step(&[]);
@@ -270,7 +329,10 @@ fn losing_the_hq_eliminates_a_seat_and_the_last_one_standing_wins() {
     }
     assert!(eliminated);
     assert_eq!(sim.outcome, Some(Outcome::Winner(0)));
-    assert!(sim.entities.iter().all(|e| e.owner == 0), "the loser's pieces are removed");
+    assert!(
+        sim.entities.iter().all(|e| e.owner == 0),
+        "the loser's pieces are removed"
+    );
 }
 
 #[test]
@@ -291,7 +353,10 @@ fn identical_inputs_give_identical_checksums() {
                         .filter(|e| e.owner == seat && e.kind.is_mobile())
                         .map(|e| e.id)
                         .collect();
-                    let to = sim.get(sim.players[((seat as usize) + 1) % sim.seats()].hq).unwrap().pos;
+                    let to = sim
+                        .get(sim.players[((seat as usize) + 1) % sim.seats()].hq)
+                        .unwrap()
+                        .pos;
                     cmds.push((seat, Command::AttackMove { units, to }));
                 }
             }
@@ -316,6 +381,143 @@ fn a_utility_deploys_even_when_its_site_is_occupied() {
     let u = first_utility(&sim, 0);
     sim.step(&[(0, Command::Deploy { unit: u, at: site })]);
     run(&mut sim, 15 * TICK_HZ);
-    assert!(sim.get(u).is_none(), "the utility should settle beside the brawler");
+    assert!(
+        sim.get(u).is_none(),
+        "the utility should settle beside the brawler"
+    );
     assert_eq!(units_of(&sim, 0, Kind::Econ).len(), 1);
+}
+
+/// A skirmisher's bullet takes a few ticks to cross its range: the target is
+/// hurt when it lands, not when it is fired.
+#[test]
+fn ranged_damage_lands_when_the_projectile_arrives() {
+    let mut sim = Sim::new(2);
+    let at = Pos::new(Angle::from_turns(1, 4), R_MID);
+    let shooter = sim.place(0, Kind::Skirmisher, at);
+    let target = sim.place(1, Kind::Brawler, at.displaced(60 * UNIT, 0));
+    sim.step(&[(
+        0,
+        Command::Attack {
+            units: vec![shooter],
+            target,
+        },
+    )]);
+    let full = sim.get(target).unwrap().max_hp();
+    let mut fired_at = None;
+    let mut hurt_at = None;
+    for _ in 0..40 {
+        sim.step(&[]);
+        if fired_at.is_none() && !sim.projectiles.is_empty() {
+            fired_at = Some(sim.tick);
+        }
+        if hurt_at.is_none() && sim.get(target).unwrap().hp < full {
+            hurt_at = Some(sim.tick);
+        }
+    }
+    let (fired, hurt) = (fired_at.expect("fired"), hurt_at.expect("hit"));
+    assert!(
+        hurt > fired,
+        "damage must wait for the bullet: fired {fired}, hurt {hurt}"
+    );
+}
+
+/// A plasma ball bursts where its target stood: a clump there all get hurt,
+/// and a target that walked away escapes it.
+#[test]
+fn plasma_splashes_a_clump_and_can_be_dodged() {
+    let mut sim = Sim::new(2);
+    let at = Pos::new(Angle::from_turns(1, 4), R_MID);
+    let turret = sim.place(0, Kind::PlasmaTurret, at);
+    let spot = at.displaced(60 * UNIT, 0);
+    let clump: Vec<EntityId> = (0..4)
+        .map(|k| sim.place(1, Kind::Brawler, spot.displaced(0, (k - 2) * 7 * UNIT)))
+        .collect();
+    for _ in 0..3 * TICK_HZ {
+        sim.step(&[]);
+    }
+    let hurt = clump
+        .iter()
+        .filter(|id| sim.get(**id).is_some_and(|e| e.hp < e.max_hp()))
+        .count();
+    assert!(hurt >= 3, "the burst should catch the clump: {hurt} hurt");
+    let _ = turret;
+
+    // A lone raider that runs as soon as it is fired at.
+    let mut sim = Sim::new(2);
+    sim.place(0, Kind::PlasmaTurret, at);
+    let runner = sim.place(1, Kind::Raider, at.displaced(65 * UNIT, 0));
+    let mut ran = false;
+    for _ in 0..2 * TICK_HZ {
+        if !ran && !sim.projectiles.is_empty() {
+            ran = true;
+            sim.step(&[(
+                1,
+                Command::Move {
+                    units: vec![runner],
+                    to: at.displaced(200 * UNIT, 0),
+                },
+            )]);
+        } else {
+            sim.step(&[]);
+        }
+    }
+    let r = sim.get(runner).unwrap();
+    assert_eq!(r.hp, r.max_hp(), "a quick unit sidesteps plasma");
+}
+
+/// Missiles curve after a target that moves, and still hit it.
+#[test]
+fn missiles_home_in_on_a_moving_target() {
+    let mut sim = Sim::new(2);
+    let at = Pos::new(Angle::from_turns(1, 4), R_MID);
+    sim.place(0, Kind::MissileTurret, at);
+    let runner = sim.place(1, Kind::Raider, at.displaced(80 * UNIT, 0));
+    sim.step(&[]);
+    sim.step(&[(
+        1,
+        Command::Move {
+            units: vec![runner],
+            to: at.displaced(200 * UNIT, 0),
+        },
+    )]);
+    let mut max_offset = 0i64;
+    for _ in 0..3 * TICK_HZ {
+        sim.step(&[]);
+        for p in &sim.projectiles {
+            max_offset = max_offset.max(at.offset_to(p.pos).1.abs());
+        }
+    }
+    let r = sim.get(runner).map(|e| e.hp);
+    assert!(
+        r.is_none_or(|hp| hp < stats::RAIDER.hp),
+        "the missile should catch it"
+    );
+    assert!(
+        max_offset > 3 * UNIT,
+        "missiles curve, they don't fly straight"
+    );
+}
+
+/// A building's explosion throws units back: light ones far, heavy ones less.
+#[test]
+fn an_explosion_throws_light_units_further_than_heavy_ones() {
+    let mut sim = Sim::new(2);
+    let at = Pos::new(Angle::from_turns(1, 4), R_MID);
+    let building = sim.place(1, Kind::Econ, at);
+    let raider = sim.place(0, Kind::Raider, at.displaced(30 * UNIT, 0));
+    let brawler = sim.place(0, Kind::Brawler, at.displaced(-30 * UNIT, 0));
+    let before = (sim.get(raider).unwrap().pos, sim.get(brawler).unwrap().pos);
+    let i = sim.entities.iter().position(|e| e.id == building).unwrap();
+    sim.entities[i].hp = 0;
+    let mut blast = false;
+    for _ in 0..TICK_HZ {
+        sim.step(&[]);
+        blast |= sim.events.iter().any(|e| matches!(e, Event::Blast { .. }));
+    }
+    assert!(blast, "the building went up");
+    let moved = |id: EntityId, from: Pos| sim.get(id).unwrap().pos.dist(from);
+    let (r, b) = (moved(raider, before.0), moved(brawler, before.1));
+    assert!(r > 10 * UNIT, "the raider is thrown: {r}");
+    assert!(r > 2 * b, "a brawler weighs more: raider {r}, brawler {b}");
 }

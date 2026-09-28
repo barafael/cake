@@ -37,9 +37,9 @@ use bevy::window::{CursorEntered, PrimaryWindow, WindowLevel};
 
 use crate::arctext::{Reserved, ReservedArcs};
 use crate::camera::{BackdropCamera, Cursor, OVERLAY_LAYER, Opening, backdrop_clear};
-use crate::ringmesh::{self, Slots};
-use crate::settings::{self, Settings, DisplayMode};
 use crate::palette;
+use crate::ringmesh::{self, Slots};
+use crate::settings::{self, DisplayMode, Settings};
 
 /// The whole circle, in circle units.
 pub const RADIUS: f32 = 600.0;
@@ -248,8 +248,8 @@ pub fn block_pointer(
     mut blocked: ResMut<PointerBlocked>,
 ) {
     let over_ui = interactions.iter().any(|i| *i != Interaction::None);
-    let on_frame = settings.mode == DisplayMode::Cake
-        && cursor.ui.is_some_and(|p| p.length() > PLAY_RADIUS);
+    let on_frame =
+        settings.mode == DisplayMode::Cake && cursor.ui.is_some_and(|p| p.length() > PLAY_RADIUS);
     blocked.set_if_neq(PointerBlocked(
         over_ui || claimed.0 || on_frame || !opening.done(),
     ));
@@ -380,7 +380,13 @@ fn kwin_keep_above(on: bool) {
                 .args(args)
                 .output()
         };
-        let unload = || dbus(&["/Scripting", "org.kde.kwin.Scripting.unloadScript", &format!("string:{name}")]);
+        let unload = || {
+            dbus(&[
+                "/Scripting",
+                "org.kde.kwin.Scripting.unloadScript",
+                &format!("string:{name}"),
+            ])
+        };
         let _ = unload();
         let loaded = dbus(&[
             "/Scripting",
@@ -486,7 +492,11 @@ fn draw(
             ChromeButton::Pin => {
                 // A drawing pin: head, and needle.
                 gizmos
-                    .circle_2d(Isometry2d::from_translation(at(0.0, 0.35 * s)), 0.55 * s, color)
+                    .circle_2d(
+                        Isometry2d::from_translation(at(0.0, 0.35 * s)),
+                        0.55 * s,
+                        color,
+                    )
                     .resolution(16);
                 gizmos.line_2d(at(0.0, -0.2 * s), at(0.0, -s), color);
             }

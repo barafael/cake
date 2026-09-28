@@ -46,7 +46,11 @@ fn guests_that_apply_the_hosts_turns_stay_identical() {
             if step % 97 == 0 {
                 let seat = host.seat_of(peer).expect("seated");
                 assert_eq!(Some(seat), g.me);
-                host.host.as_mut().unwrap().seq.submit(seat, Command::Produce(Kind::Raider));
+                host.host
+                    .as_mut()
+                    .unwrap()
+                    .seq
+                    .submit(seat, Command::Produce(Kind::Raider));
             }
         }
         let (tick, cmds) = host.cut_turn().expect("host cuts turns");
@@ -77,7 +81,10 @@ fn guests_that_apply_the_hosts_turns_stay_identical() {
         assert_eq!(g.sim.tick, host.sim.tick);
         assert_eq!(g.sim.checksum(), host.sim.checksum());
     }
-    assert!(compared >= 150, "both guests report every 20 ticks: {compared}");
+    assert!(
+        compared >= 150,
+        "both guests report every 20 ticks: {compared}"
+    );
     assert!(
         host.sim.entities.iter().any(|e| e.kind == Kind::Raider),
         "the guests' commands took effect"
@@ -94,7 +101,12 @@ fn a_watcher_has_no_seat_and_the_host_runs_the_bots() {
         host.advance(TICK_SECS);
     }
     assert!(
-        host.sim.entities.iter().filter(|e| e.kind.is_mobile()).count() > 3,
+        host.sim
+            .entities
+            .iter()
+            .filter(|e| e.kind.is_mobile())
+            .count()
+            > 3,
         "bots produce without anyone at the keyboard"
     );
 }

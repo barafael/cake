@@ -15,8 +15,8 @@
 //!
 //! When the app opens, everything grows out of the centre: see [`Opening`].
 
-use bevy::camera::{CameraOutputMode, ScalingMode};
 use bevy::camera::visibility::RenderLayers;
+use bevy::camera::{CameraOutputMode, ScalingMode};
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy::render::render_resource::BlendState;
@@ -24,7 +24,7 @@ use bevy::ui::IsDefaultUiCamera;
 use bevy::window::PrimaryWindow;
 
 use crate::chrome::{PointerBlocked, PointerSet, RADIUS};
-use crate::settings::{Settings, DisplayMode};
+use crate::settings::{DisplayMode, Settings};
 use crate::{AppState, Match, palette};
 
 /// Units that always fit the window: the whole circle, frame included.
@@ -52,6 +52,11 @@ impl Opening {
 
     pub fn done(&self) -> bool {
         self.t >= 1.0
+    }
+
+    /// Play it again from the start.
+    pub fn restart(&mut self) {
+        self.t = 0.0;
     }
 }
 
@@ -102,7 +107,9 @@ pub fn plugin(app: &mut App) {
         .init_resource::<Opening>()
         .add_systems(Startup, spawn)
         .add_systems(OnEnter(AppState::Game), face_home)
-        .add_systems(OnEnter(AppState::Lobby), |mut rig: ResMut<Rig>| *rig = Rig::default())
+        .add_systems(OnEnter(AppState::Lobby), |mut rig: ResMut<Rig>| {
+            *rig = Rig::default()
+        })
         .add_systems(Update, track_cursor.in_set(PointerSet))
         .add_systems(
             Update,
@@ -288,7 +295,7 @@ fn set_scale(projection: &mut Projection, scale: f32) {
     }
 }
 
-fn track_cursor(
+pub fn track_cursor(
     window: Single<&Window, With<PrimaryWindow>>,
     main: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     overlay: Query<(&Camera, &GlobalTransform), With<OverlayCamera>>,

@@ -120,7 +120,9 @@ fn path() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("APPDATA").map(std::path::PathBuf::from))
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))?;
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
+        })?;
     Some(base.join("cake").join("settings"))
 }
 
@@ -190,7 +192,10 @@ mod tests {
 
     #[test]
     fn older_settings_files_still_read() {
-        assert_eq!(Settings::parse("window = windowed").mode, DisplayMode::Window);
+        assert_eq!(
+            Settings::parse("window = windowed").mode,
+            DisplayMode::Window
+        );
         assert_eq!(Settings::parse("window = circle").mode, DisplayMode::Cake);
     }
 }

@@ -24,19 +24,35 @@ pub enum Command {
     /// Where new units walk after they spawn.
     SetRally(Pos),
     /// Walk there, ignoring enemies.
-    Move { units: Vec<EntityId>, to: Pos },
+    Move {
+        units: Vec<EntityId>,
+        to: Pos,
+    },
     /// Walk there, fighting anything met on the way.
-    AttackMove { units: Vec<EntityId>, to: Pos },
+    AttackMove {
+        units: Vec<EntityId>,
+        to: Pos,
+    },
     /// Chase and attack one target while it stays visible.
     Attack {
         units: Vec<EntityId>,
         target: EntityId,
     },
-    Stop { units: Vec<EntityId> },
-    /// A utility walks to `at` and lays down a turret, which it then builds.
-    Build { unit: EntityId, at: Pos },
+    Stop {
+        units: Vec<EntityId>,
+    },
+    /// A utility walks to `at` and lays down a turret of `kind` (one of
+    /// [`Kind::TURRETS`]), which it then builds.
+    Build {
+        unit: EntityId,
+        at: Pos,
+        kind: Kind,
+    },
     /// A utility walks to `at` and becomes an economy building.
-    Deploy { unit: EntityId, at: Pos },
+    Deploy {
+        unit: EntityId,
+        at: Pos,
+    },
     /// Utilities repair a friendly entity, or finish building it.
     Repair {
         units: Vec<EntityId>,

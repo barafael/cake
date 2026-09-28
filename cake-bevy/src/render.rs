@@ -7,12 +7,13 @@
 use bevy::prelude::*;
 use cake_core::geom::{R_INNER, R_OUTER, UNIT, sector_edge};
 use cake_core::stats::{self, Kind};
-use cake_core::{Entity, Event, Order, Pos, Seat};
+use cake_core::{Entity, Order, Pos, Seat};
 
 use crate::camera::{Cursor, Rig};
+use crate::fx::{Fx, GlowGizmos};
 use crate::input::{Drag, Mode, Selection};
-use crate::{palette, ringmesh};
 use crate::{AppState, Match};
+use crate::{palette, ringmesh};
 
 pub const INNER: f32 = (R_INNER / UNIT) as f32;
 pub const OUTER: f32 = (R_OUTER / UNIT) as f32;
@@ -23,33 +24,10 @@ fn wrap_turn(a: f32) -> f32 {
 }
 
 pub fn plugin(app: &mut App) {
-    app.init_resource::<Effects>()
-        .init_resource::<Shapes>()
-        .add_systems(OnEnter(AppState::Game), |mut fx: ResMut<Effects>| fx.0.clear())
-        .add_systems(
-            Update,
-            (
-                (collect_effects, draw_game)
-                    .chain()
-                    .run_if(in_state(AppState::Game).and_then(resource_exists::<Match>)),
-            ),
-        );
-}
-
-/// Presentation-only flashes: shots, deaths, completions.
-#[derive(Resource, Default)]
-pub struct Effects(Vec<Effect>);
-
-struct Effect {
-    kind: EffectKind,
-    age: f32,
-    ttl: f32,
-}
-
-enum EffectKind {
-    Tracer { from: Vec2, to: Vec2, color: Color },
-    Burst { at: Vec2, color: Color, size: f32 },
-    Done { at: Vec2, color: Color, size: f32 },
+    app.init_resource::<Shapes>().add_systems(
+        Update,
+        draw_game.run_if(in_state(AppState::Game).and_then(resource_exists::<Match>)),
+    );
 }
 
 /// Local-frame outlines per kind: forward is +x, left is +y, in map units.
@@ -88,14 +66,26 @@ impl Default for Shapes {
             (
                 Kind::Skirmisher,
                 vec![
-                    line(&[(6.0, 0.0), (-5.0, 5.0), (-2.0, 0.0), (-5.0, -5.0), (6.0, 0.0)]),
+                    line(&[
+                        (6.0, 0.0),
+                        (-5.0, 5.0),
+                        (-2.0, 0.0),
+                        (-5.0, -5.0),
+                        (6.0, 0.0),
+                    ]),
                     line(&[(6.0, 0.0), (11.0, 0.0)]),
                 ],
             ),
             (
                 Kind::Raider,
                 vec![
-                    line(&[(8.0, 0.0), (-5.0, 3.5), (-2.5, 0.0), (-5.0, -3.5), (8.0, 0.0)]),
+                    line(&[
+                        (8.0, 0.0),
+                        (-5.0, 3.5),
+                        (-2.5, 0.0),
+                        (-5.0, -3.5),
+                        (8.0, 0.0),
+                    ]),
                     line(&[(-5.0, 3.5), (-7.5, 5.0)]),
                     line(&[(-5.0, -3.5), (-7.5, -5.0)]),
                 ],
@@ -123,16 +113,55 @@ impl Default for Shapes {
             (
                 Kind::Econ,
                 vec![
-                    line(&[(12.0, 0.0), (0.0, 12.0), (-12.0, 0.0), (0.0, -12.0), (12.0, 0.0)]),
+                    line(&[
+                        (12.0, 0.0),
+                        (0.0, 12.0),
+                        (-12.0, 0.0),
+                        (0.0, -12.0),
+                        (12.0, 0.0),
+                    ]),
                     line(&[(-6.0, 0.0), (6.0, 0.0)]),
                     line(&[(0.0, -6.0), (0.0, 6.0)]),
                 ],
             ),
+            // The gun: a square with twin barrels.
             (
                 Kind::Turret,
                 vec![
-                    line(&[(7.0, 7.0), (-7.0, 7.0), (-7.0, -7.0), (7.0, -7.0), (7.0, 7.0)]),
-                    line(&[(0.0, 0.0), (13.0, 0.0)]),
+                    line(&[
+                        (7.0, 7.0),
+                        (-7.0, 7.0),
+                        (-7.0, -7.0),
+                        (7.0, -7.0),
+                        (7.0, 7.0),
+                    ]),
+                    line(&[(0.0, 2.0), (13.0, 2.0)]),
+                    line(&[(0.0, -2.0), (13.0, -2.0)]),
+                ],
+            ),
+            // Plasma: a hexagon around its core, with an emitter fork.
+            (
+                Kind::PlasmaTurret,
+                vec![
+                    ngon(6, 10.0, std::f32::consts::FRAC_PI_6),
+                    ngon(6, 4.0, 0.0),
+                    line(&[(15.0, 4.0), (8.0, 4.0), (8.0, -4.0), (15.0, -4.0)]),
+                ],
+            ),
+            // Missiles: a pod of three tubes on a round base.
+            (
+                Kind::MissileTurret,
+                vec![
+                    ngon(8, 9.0, eighth),
+                    line(&[
+                        (-3.0, -6.0),
+                        (13.0, -6.0),
+                        (13.0, 6.0),
+                        (-3.0, 6.0),
+                        (-3.0, -6.0),
+                    ]),
+                    line(&[(-3.0, -2.0), (13.0, -2.0)]),
+                    line(&[(-3.0, 2.0), (13.0, 2.0)]),
                 ],
             ),
         ])
@@ -140,7 +169,7 @@ impl Default for Shapes {
 }
 
 impl Shapes {
-    fn of(&self, kind: Kind) -> &[Vec<Vec2>] {
+    pub fn of(&self, kind: Kind) -> &[Vec<Vec2>] {
         self.0
             .iter()
             .find(|(k, _)| *k == kind)
@@ -161,7 +190,7 @@ fn facing_dir(e: &Entity, at: Vec2) -> Vec2 {
     let (t, r) = e.facing;
     // Structures other than turrets always face outward, so they read the same
     // all round the ring.
-    let (t, r) = if e.kind.is_structure() && e.kind != Kind::Turret {
+    let (t, r) = if e.kind.is_structure() && !e.kind.is_turret() {
         (0, 1000)
     } else {
         (t, r)
@@ -169,7 +198,14 @@ fn facing_dir(e: &Entity, at: Vec2) -> Vec2 {
     (tangent * t as f32 + radial * r as f32).normalize_or(radial)
 }
 
-fn draw_shape(gizmos: &mut Gizmos, shapes: &Shapes, kind: Kind, at: Vec2, dir: Vec2, color: Color) {
+fn draw_shape(
+    gizmos: &mut Gizmos<impl GizmoConfigGroup>,
+    shapes: &Shapes,
+    kind: Kind,
+    at: Vec2,
+    dir: Vec2,
+    color: Color,
+) {
     let left = dir.perp();
     for strip in shapes.of(kind) {
         gizmos.linestrip_2d(strip.iter().map(|p| at + dir * p.x + left * p.y), color);
@@ -200,7 +236,11 @@ pub fn draw_ring(gizmos: &mut Gizmos, sectors: &[Sector]) {
     for s in sectors.iter().filter(|s| s.to > s.from) {
         if shared {
             let edge = Vec2::from_angle(s.to);
-            gizmos.line_2d(edge * INNER, edge * OUTER, palette::FAINT.with_alpha(0.25 * s.fade));
+            gizmos.line_2d(
+                edge * INNER,
+                edge * OUTER,
+                palette::FAINT.with_alpha(0.25 * s.fade),
+            );
         }
         // A small gap at each end once there are neighbours to be apart from.
         let gap = if shared { 0.01 } else { 0.0 };
@@ -213,72 +253,13 @@ pub fn draw_ring(gizmos: &mut Gizmos, sectors: &[Sector]) {
     }
 }
 
-fn collect_effects(time: Res<Time>, mut fx: ResMut<Effects>, mut m: ResMut<Match>) {
-    let dt = time.delta_secs();
-    fx.0.retain_mut(|e| {
-        e.age += dt;
-        e.age < e.ttl
-    });
-    let events = std::mem::take(&mut m.events);
-    let me = m.me;
-    // A flash is shown when I could see where it happened.
-    let seen = |p: Pos| {
-        me.is_none_or(|s| {
-            m.sim
-                .entities
-                .iter()
-                .any(|e| e.owner == s && e.pos.within(p, e.stats().vision))
-        })
-    };
-    for event in events {
-        match event {
-            Event::Shot {
-                from,
-                to,
-                owner,
-                kind,
-            } if seen(from) || seen(to) => {
-                let color = palette::seat(owner as usize).lighter(0.2);
-                let ttl = if kind == Kind::Brawler { 0.08 } else { 0.12 };
-                fx.0.push(Effect {
-                    kind: EffectKind::Tracer {
-                        from: to_vec2(from),
-                        to: to_vec2(to),
-                        color,
-                    },
-                    age: 0.0,
-                    ttl,
-                });
-            }
-            Event::Died { owner, kind, pos } if seen(pos) => fx.0.push(Effect {
-                kind: EffectKind::Burst {
-                    at: to_vec2(pos),
-                    color: palette::seat(owner as usize),
-                    size: (kind.stats().radius / UNIT) as f32 * 1.6,
-                },
-                age: 0.0,
-                ttl: 0.45,
-            }),
-            Event::Completed { owner, kind, pos } if seen(pos) => fx.0.push(Effect {
-                kind: EffectKind::Done {
-                    at: to_vec2(pos),
-                    color: palette::seat(owner as usize),
-                    size: (kind.stats().radius / UNIT) as f32 + 4.0,
-                },
-                age: 0.0,
-                ttl: 0.6,
-            }),
-            _ => {}
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
-fn draw_game(
+pub fn draw_game(
     mut gizmos: Gizmos,
     m: Res<Match>,
+    mut glow: Gizmos<GlowGizmos>,
     shapes: Res<Shapes>,
-    fx: Res<Effects>,
+    fx: Res<Fx>,
     rig: Res<Rig>,
     selection: Res<Selection>,
     mode: Res<Mode>,
@@ -294,7 +275,12 @@ fn draw_game(
             Sector {
                 from,
                 // The span, counter-clockwise; a lone seat has the whole ring.
-                to: from + if n == 1 { std::f32::consts::TAU } else { wrap_turn(to - from) },
+                to: from
+                    + if n == 1 {
+                        std::f32::consts::TAU
+                    } else {
+                        wrap_turn(to - from)
+                    },
                 color: palette::seat_status(i, sim.is_alive(i as Seat)),
                 fade: 1.0,
             }
@@ -309,14 +295,59 @@ fn draw_game(
         let at = m.draw_pos(e);
         let dir = facing_dir(e, at);
         let base = palette::seat(e.owner as usize);
-        let color = if e.complete { base } else { base.with_alpha(0.45) };
+        let color = if e.complete {
+            base
+        } else {
+            base.with_alpha(0.45)
+        };
+        // A fresh hit flashes white.
+        let hurt = fx.hurt(e.id);
+        let color = color.mix(&Color::WHITE, 0.8 * hurt);
         draw_shape(&mut gizmos, &shapes, e.kind, at, dir, color);
+        if hurt > 0.0 {
+            draw_shape(
+                &mut glow,
+                &shapes,
+                e.kind,
+                at,
+                dir,
+                color.with_alpha(0.4 * hurt),
+            );
+        }
+
+        // Thrown by a blast: streaks trail it.
+        let (pt, pr) = e.push;
+        let speed = ((pt * pt + pr * pr) as f32).sqrt() / UNIT as f32;
+        if speed > 0.3 {
+            let radial = at.normalize_or(Vec2::X);
+            let away = -(radial.perp() * pt as f32 + radial * pr as f32).normalize_or(radial);
+            let side = away.perp() * (e.radius() / UNIT) as f32 * 0.6;
+            let len = (speed * 4.0).min(16.0);
+            for s in [side, -side] {
+                gizmos.line_2d(at + s, at + s + away * len, color.with_alpha(0.35));
+            }
+        }
+
+        // A plasma turret's core glows as it charges.
+        if e.kind == Kind::PlasmaTurret
+            && e.complete
+            && let Some(weapon) = &e.stats().weapon
+        {
+            let charge = 1.0 - e.cooldown as f32 / weapon.cooldown as f32;
+            let core = color.mix(&Color::WHITE, 0.5).with_alpha(0.2 + 0.6 * charge);
+            glow.circle_2d(Isometry2d::from_translation(at), 2.0 + 2.0 * charge, core)
+                .resolution(10);
+        }
 
         let radius = (e.radius() / UNIT) as f32;
         let selected = selection.ids.contains(&e.id);
         if selected {
             gizmos
-                .circle_2d(Isometry2d::from_translation(at), radius + 4.0, palette::SELECTED)
+                .circle_2d(
+                    Isometry2d::from_translation(at),
+                    radius + 4.0,
+                    palette::SELECTED,
+                )
                 .resolution(24);
         }
         if e.hp < e.max_hp() || selected {
@@ -356,7 +387,7 @@ fn draw_game(
             continue;
         }
         let (to, color) = match e.order {
-            Order::Move(p) | Order::Deploy(p) | Order::Build(p) => (p, palette::GOOD),
+            Order::Move(p) | Order::Deploy(p) | Order::Build(p, _) => (p, palette::GOOD),
             Order::AttackMove(p) => (p, palette::BAD),
             _ => continue,
         };
@@ -379,7 +410,7 @@ fn draw_game(
     if let (Some(me), Some(world)) = (m.me, cursor.world) {
         let at = Pos::from_xy(world.x as f64, world.y as f64);
         let site = match *mode {
-            Mode::Build => Some((Kind::Turret, sim.turret_site(me, at))),
+            Mode::Build(kind) => Some((kind, sim.turret_site(me, at, kind))),
             Mode::Deploy => Some((Kind::Econ, sim.econ_site(me, at))),
             _ => None,
         };
@@ -394,7 +425,11 @@ fn draw_game(
                     .filter(|e| (e.kind == Kind::Econ || e.kind == Kind::Hq) && m.sees(e))
                 {
                     gizmos
-                        .circle_2d(Isometry2d::from_translation(m.draw_pos(e)), spacing, palette::FAINT)
+                        .circle_2d(
+                            Isometry2d::from_translation(m.draw_pos(e)),
+                            spacing,
+                            palette::FAINT,
+                        )
                         .resolution(64);
                 }
             }
@@ -403,32 +438,23 @@ fn draw_game(
                 Err(_) => (at, palette::BAD),
             };
             let at = to_vec2(pos);
-            draw_shape(&mut gizmos, &shapes, kind, at, at.normalize_or(Vec2::X), color);
-            if kind == Kind::Turret {
-                let reach = (stats::TURRET.weapon.as_ref().map_or(0, |w| w.range) / UNIT) as f32;
+            draw_shape(
+                &mut gizmos,
+                &shapes,
+                kind,
+                at,
+                at.normalize_or(Vec2::X),
+                color,
+            );
+            if let Some(weapon) = &kind.stats().weapon {
+                let reach = (weapon.range / UNIT) as f32;
                 gizmos
-                    .circle_2d(Isometry2d::from_translation(at), reach, color.with_alpha(0.3))
+                    .circle_2d(
+                        Isometry2d::from_translation(at),
+                        reach,
+                        color.with_alpha(0.3),
+                    )
                     .resolution(48);
-            }
-        }
-    }
-
-    // Effects.
-    for e in &fx.0 {
-        let t = e.age / e.ttl;
-        match e.kind {
-            EffectKind::Tracer { from, to, color } => {
-                gizmos.line_2d(from, to, color.with_alpha(1.0 - t));
-            }
-            EffectKind::Burst { at, color, size } => {
-                gizmos
-                    .circle_2d(Isometry2d::from_translation(at), size * (0.4 + t), color.with_alpha(1.0 - t))
-                    .resolution(16);
-            }
-            EffectKind::Done { at, color, size } => {
-                gizmos
-                    .circle_2d(Isometry2d::from_translation(at), size + 10.0 * t, color.with_alpha(1.0 - t))
-                    .resolution(24);
             }
         }
     }
