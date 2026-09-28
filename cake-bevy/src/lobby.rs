@@ -24,10 +24,13 @@ pub struct Lobby {
     pub watching: bool,
     /// Feedback for the last thing that was refused.
     pub status: String,
-    /// A `Start` that arrived while this peer was still in the last match:
-    /// the players, and the host that sent it.
-    pub pending: Option<(Vec<Member>, PeerId)>,
 }
+
+/// A `Start` that arrived while this peer was still in the last match: the
+/// players, and the host that sent it. Kept apart from [`Lobby`], whose
+/// changes redraw the lobby.
+#[derive(Resource, Default)]
+pub struct PendingStart(pub Option<(Vec<Member>, PeerId)>);
 
 impl Lobby {
     pub fn players(&self) -> impl Iterator<Item = &Member> {
@@ -53,6 +56,17 @@ pub fn my_key(net: &NetState) -> String {
     net.my_id.map_or_else(|| "local".to_string(), |id| id.to_string())
 }
 
+/// A member's name as shown to me: marked when it is me or a bot.
+pub fn display_name(m: &Member, my_key: &str) -> String {
+    let you = if m.peer.as_deref() == Some(my_key) {
+        " (you)"
+    } else {
+        ""
+    };
+    let bot = if m.is_bot() { " [bot]" } else { "" };
+    format!("{}{you}{bot}", m.name)
+}
+
 pub fn plugin(app: &mut App) {
     // The room must exist before anything runs: the initial state's OnEnter,
     // which opens the socket, runs ahead of Startup.
@@ -67,6 +81,7 @@ pub fn plugin(app: &mut App) {
         net.name = web::player_name();
     }
     app.init_state::<AppState>()
+        .init_resource::<PendingStart>()
         .add_systems(Startup, quick_start)
         .add_systems(OnEnter(AppState::Lobby), open_socket)
         .add_systems(
@@ -146,10 +161,10 @@ pub fn elect_host(socket: Option<ResMut<MatchboxSocket>>, mut net: ResMut<NetSta
 fn resume_pending(
     mut commands: Commands,
     net: Res<NetState>,
-    mut lobby: ResMut<Lobby>,
+    mut pending: ResMut<PendingStart>,
     mut next: ResMut<NextState<AppState>>,
 ) {
-    if let Some((players, host)) = lobby.pending.take() {
+    if let Some((players, host)) = pending.0.take() {
         begin(&mut commands, &net, &mut next, players, false, Some(host));
     }
 }

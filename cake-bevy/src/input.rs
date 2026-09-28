@@ -14,13 +14,18 @@
 //! | Ctrl+A | Select the whole army |
 //! | Space | Select the HQ |
 //! | Esc | Leave targeting, then clear the selection |
+//!
+//! The HUD's buttons do the same through [`Act`], and the map ignores
+//! presses over them or over the window frame.
 
 use bevy::prelude::*;
 use cake_core::geom::UNIT;
-use cake_core::stats::Kind;
+use cake_core::stats::{self, Kind, SUPPLY};
 use cake_core::{Command, EntityId, Pos};
 
-use crate::camera::{Cursor, MainCamera};
+use crate::camera::Cursor;
+use crate::ringmesh;
+use crate::chrome::PointerBlocked;
 use crate::{AppState, Match};
 
 /// Pixels the pointer must travel before a click becomes a box.
@@ -55,16 +60,57 @@ impl Mode {
     }
 }
 
-/// A left-button press in progress, in viewport pixels.
+/// A left-button press in progress: where it started, in viewport pixels
+/// and in world units.
 #[derive(Resource, Default, Debug)]
 pub struct Drag {
-    pub start: Option<Vec2>,
+    pub start: Option<(Vec2, Vec2)>,
 }
 
 impl Drag {
-    pub fn is_box(&self, now: Vec2) -> bool {
-        self.start
-            .is_some_and(|s| s.distance(now) > DRAG_THRESHOLD)
+    /// The selection region from the press to the pointer, once the pointer
+    /// has moved far enough for a press to be a drag.
+    pub fn region(&self, viewport: Vec2, world: Vec2) -> Option<PolarBox> {
+        let (px, w) = self.start?;
+        (px.distance(viewport) > DRAG_THRESHOLD).then(|| PolarBox::spanning(w, world))
+    }
+}
+
+/// The selection region: a rectangle in polar coordinates around the ring's
+/// centre. Two sides are radii, and two are arcs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PolarBox {
+    pub r_min: f32,
+    pub r_max: f32,
+    /// The arc runs from `from` through `sweep` radians (either sign), the
+    /// short way round.
+    pub from: f32,
+    pub sweep: f32,
+}
+
+impl PolarBox {
+    pub fn spanning(a: Vec2, b: Vec2) -> PolarBox {
+        let from = ringmesh::angle_of(a);
+        PolarBox {
+            r_min: a.length().min(b.length()),
+            r_max: a.length().max(b.length()),
+            from,
+            sweep: ringmesh::wrap_pi(ringmesh::angle_of(b) - from),
+        }
+    }
+
+    pub fn contains(&self, p: Vec2) -> bool {
+        let (start, end) = (self.from, self.from + self.sweep);
+        (self.r_min..=self.r_max).contains(&p.length())
+            && ringmesh::in_span(ringmesh::angle_of(p), (start.min(end), start.max(end)))
+    }
+
+    /// The outline, as one closed line: inner arc, then the outer arc back.
+    pub fn outline(&self) -> Vec<Vec2> {
+        let mut points: Vec<Vec2> = ringmesh::arc(self.r_min, self.from, self.sweep).collect();
+        let outer: Vec<Vec2> = ringmesh::arc(self.r_max, self.from, self.sweep).collect();
+        points.extend(outer.into_iter().rev());
+        points
     }
 }
 
@@ -87,29 +133,30 @@ pub fn plugin(app: &mut App) {
         );
 }
 
-/// Forget selected entities that died.
+/// Forget selected entities that died. Looks first: a mutable borrow alone
+/// would mark the selection changed every frame.
 fn prune(mut sel: ResMut<Selection>, m: Res<Match>) {
-    let before = sel.ids.len();
-    sel.ids.retain(|id| m.sim.get(*id).is_some());
-    if sel.ids.len() != before && sel.ids.is_empty() && !sel.hq {
-        sel.ids.clear();
+    if sel.ids.iter().any(|id| m.sim.get(*id).is_none()) {
+        sel.ids.retain(|id| m.sim.get(*id).is_some());
     }
 }
 
 /// My selected mobile units.
-fn my_units(m: &Match, sel: &Selection) -> Vec<EntityId> {
+fn mine<'a>(m: &'a Match, sel: &'a Selection) -> impl Iterator<Item = &'a cake_core::Entity> {
     sel.ids
         .iter()
         .filter_map(|id| m.sim.get(*id))
         .filter(|e| Some(e.owner) == m.me && e.kind.is_mobile())
-        .map(|e| e.id)
-        .collect()
+}
+
+fn my_units(m: &Match, sel: &Selection) -> Vec<EntityId> {
+    mine(m, sel).map(|e| e.id).collect()
 }
 
 fn my_utilities(m: &Match, sel: &Selection) -> Vec<EntityId> {
-    my_units(m, sel)
-        .into_iter()
-        .filter(|id| m.sim.get(*id).is_some_and(|e| e.kind == Kind::Utility))
+    mine(m, sel)
+        .filter(|e| e.kind == Kind::Utility)
+        .map(|e| e.id)
         .collect()
 }
 
@@ -130,6 +177,90 @@ fn pick(m: &Match, world: Vec2, filter: impl Fn(&cake_core::Entity) -> bool) -> 
         .map(|(e, _)| e.id)
 }
 
+/// Something the player can do from the keyboard or a HUD button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Act {
+    Produce(Kind),
+    Cancel,
+    AttackMove,
+    Stop,
+    Build,
+    Deploy,
+}
+
+impl Act {
+    pub fn key(self) -> &'static str {
+        match self {
+            Act::Produce(Kind::Brawler) => "Q",
+            Act::Produce(Kind::Skirmisher) => "W",
+            Act::Produce(Kind::Raider) => "E",
+            Act::Produce(_) => "R",
+            Act::Cancel => "X",
+            Act::AttackMove => "A",
+            Act::Stop => "S",
+            Act::Build => "B",
+            Act::Deploy => "D",
+        }
+    }
+
+    /// What it is, in a word.
+    pub fn title(self) -> &'static str {
+        match self {
+            Act::Produce(kind) => kind.name(),
+            Act::Cancel => "Cancel",
+            Act::AttackMove => "Attack",
+            Act::Stop => "Stop",
+            Act::Build => "Turret",
+            Act::Deploy => "Deploy",
+        }
+    }
+
+    /// Its key, and its price if it has one.
+    pub fn detail(self) -> String {
+        match self {
+            Act::Produce(kind) => format!("{}  {}", self.key(), kind.stats().cost / SUPPLY),
+            Act::Build => format!("{}  {}", self.key(), stats::TURRET.cost / SUPPLY),
+            _ => self.key().to_string(),
+        }
+    }
+
+    /// Would doing this now make sense?
+    pub fn available(self, m: &Match, sel: &Selection) -> bool {
+        let Some(me) = m.me else {
+            return false;
+        };
+        let Some(p) = m.sim.player(me).filter(|p| p.alive) else {
+            return false;
+        };
+        match self {
+            Act::Produce(kind) => {
+                p.supply >= kind.stats().cost && p.queue.len() < stats::QUEUE_MAX
+            }
+            Act::Cancel => !p.queue.is_empty(),
+            Act::AttackMove | Act::Stop => mine(m, sel).next().is_some(),
+            Act::Build | Act::Deploy => mine(m, sel).any(|e| e.kind == Kind::Utility),
+        }
+    }
+
+    /// Do it: queue a command, or enter a targeting mode.
+    pub fn perform(self, m: &mut Match, sel: &Selection, mode: &mut Mode) {
+        if !self.available(m, sel) {
+            return;
+        }
+        match self {
+            Act::Produce(kind) => m.outbox.push(Command::Produce(kind)),
+            Act::Cancel => m.outbox.push(Command::CancelProduce),
+            Act::AttackMove => *mode = Mode::AttackMove,
+            Act::Stop => {
+                let units = my_units(m, sel);
+                m.outbox.push(Command::Stop { units });
+            }
+            Act::Build => *mode = Mode::Build,
+            Act::Deploy => *mode = Mode::Deploy,
+        }
+    }
+}
+
 fn keys(
     keys: Res<ButtonInput<KeyCode>>,
     mut m: ResMut<Match>,
@@ -140,20 +271,6 @@ fn keys(
         return;
     };
     let ctrl = keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-
-    for (key, kind) in [
-        (KeyCode::KeyQ, Kind::Brawler),
-        (KeyCode::KeyW, Kind::Skirmisher),
-        (KeyCode::KeyE, Kind::Raider),
-        (KeyCode::KeyR, Kind::Utility),
-    ] {
-        if keys.just_pressed(key) {
-            m.outbox.push(Command::Produce(kind));
-        }
-    }
-    if keys.just_pressed(KeyCode::KeyX) {
-        m.outbox.push(Command::CancelProduce);
-    }
 
     if ctrl && keys.just_pressed(KeyCode::KeyA) {
         sel.hq = false;
@@ -174,19 +291,20 @@ fn keys(
         return;
     }
 
-    let units = my_units(&m, &sel);
-    if keys.just_pressed(KeyCode::KeyA) && !units.is_empty() {
-        *mode = Mode::AttackMove;
-    }
-    if keys.just_pressed(KeyCode::KeyS) && !units.is_empty() {
-        m.outbox.push(Command::Stop { units });
-    }
-    let utilities = !my_utilities(&m, &sel).is_empty();
-    if keys.just_pressed(KeyCode::KeyB) && utilities {
-        *mode = Mode::Build;
-    }
-    if keys.just_pressed(KeyCode::KeyD) && utilities {
-        *mode = Mode::Deploy;
+    for (key, act) in [
+        (KeyCode::KeyQ, Act::Produce(Kind::Brawler)),
+        (KeyCode::KeyW, Act::Produce(Kind::Skirmisher)),
+        (KeyCode::KeyE, Act::Produce(Kind::Raider)),
+        (KeyCode::KeyR, Act::Produce(Kind::Utility)),
+        (KeyCode::KeyX, Act::Cancel),
+        (KeyCode::KeyA, Act::AttackMove),
+        (KeyCode::KeyS, Act::Stop),
+        (KeyCode::KeyB, Act::Build),
+        (KeyCode::KeyD, Act::Deploy),
+    ] {
+        if keys.just_pressed(key) {
+            act.perform(&mut m, &sel, &mut mode);
+        }
     }
     if keys.just_pressed(KeyCode::Escape) {
         if *mode != Mode::Normal {
@@ -202,20 +320,22 @@ fn mouse(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     cursor: Res<Cursor>,
-    camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     mut m: ResMut<Match>,
     mut sel: ResMut<Selection>,
     mut mode: ResMut<Mode>,
     mut drag: ResMut<Drag>,
+    blocked: Res<PointerBlocked>,
 ) {
     let (Some(world), Some(viewport)) = (cursor.world, cursor.viewport) else {
         return;
     };
+    // Over a button or the window frame, presses are not the map's. A drag
+    // that started on the map still ends wherever it is released.
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     let me = m.me;
 
     // Left button: targeting modes act on press; otherwise it selects.
-    if buttons.just_pressed(MouseButton::Left) {
+    if buttons.just_pressed(MouseButton::Left) && !blocked.0 {
         let units = my_units(&m, &sel);
         let at = to_pos(world);
         let nearest_utility = |m: &Match| {
@@ -249,29 +369,20 @@ fn mouse(
                 *mode = Mode::Normal;
             }
         } else {
-            drag.start = Some(viewport);
+            drag.start = Some((viewport, world));
         }
     }
 
-    if buttons.just_released(MouseButton::Left)
-        && let Some(start) = drag.start.take()
-    {
-        if drag_is_box(start, viewport) {
-            let Ok((camera, tf)) = camera.single() else {
-                return;
-            };
-            let lo = start.min(viewport);
-            let hi = start.max(viewport);
+    if buttons.just_released(MouseButton::Left) && drag.start.is_some() {
+        let region = drag.region(viewport, world);
+        drag.start = None;
+        if let Some(region) = region {
             let boxed: Vec<EntityId> = m
                 .sim
                 .entities
                 .iter()
                 .filter(|e| Some(e.owner) == me && e.kind.is_mobile())
-                .filter(|e| {
-                    camera
-                        .world_to_viewport(tf, m.draw_pos(e).extend(0.0))
-                        .is_ok_and(|p| p.cmpge(lo).all() && p.cmple(hi).all())
-                })
+                .filter(|e| region.contains(m.draw_pos(e)))
                 .map(|e| e.id)
                 .collect();
             if !shift {
@@ -306,7 +417,7 @@ fn mouse(
         }
     }
 
-    if buttons.just_pressed(MouseButton::Right) {
+    if buttons.just_pressed(MouseButton::Right) && !blocked.0 {
         *mode = Mode::Normal;
         let Some(me) = me else {
             return;
@@ -343,6 +454,42 @@ fn mouse(
     }
 }
 
-fn drag_is_box(start: Vec2, end: Vec2) -> bool {
-    start.distance(end) > DRAG_THRESHOLD
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    #[test]
+    fn a_polar_box_holds_what_lies_between_its_radii_and_arcs() {
+        let b = PolarBox::spanning(Vec2::new(400.0, 0.0), Vec2::from_angle(FRAC_PI_2) * 480.0);
+        assert!(b.contains(Vec2::from_angle(0.7) * 450.0));
+        assert!(!b.contains(Vec2::from_angle(0.7) * 350.0), "inside the inner arc");
+        assert!(!b.contains(Vec2::from_angle(-0.2) * 450.0), "before the first radius");
+        assert!(!b.contains(Vec2::from_angle(2.0) * 450.0), "past the second radius");
+    }
+
+    #[test]
+    fn a_polar_box_takes_the_short_way_round_either_way() {
+        // Dragged clockwise across the seam at angle pi.
+        let b = PolarBox::spanning(Vec2::from_angle(PI - 0.2) * 450.0, Vec2::from_angle(-PI + 0.2) * 460.0);
+        assert!(b.sweep.abs() < 0.5, "{b:?}");
+        assert!(b.contains(Vec2::from_angle(PI) * 455.0));
+        assert!(!b.contains(Vec2::from_angle(0.0) * 455.0));
+        // And the other way.
+        let c = PolarBox::spanning(Vec2::from_angle(0.3) * 450.0, Vec2::from_angle(-0.3) * 460.0);
+        assert!(c.sweep < 0.0);
+        assert!(c.contains(Vec2::from_angle(0.0) * 455.0));
+        assert!(!c.contains(Vec2::from_angle(PI) * 455.0));
+    }
+
+    #[test]
+    fn the_outline_is_closed_by_its_radii() {
+        let b = PolarBox::spanning(Vec2::new(400.0, 0.0), Vec2::new(0.0, 500.0));
+        let o = b.outline();
+        assert!((o[0].length() - 400.0).abs() < 1e-3);
+        assert!((o.last().unwrap().length() - 500.0).abs() < 1e-3);
+        // First and last points share the start angle: the closing radius.
+        assert!(o[0].normalize().distance(o.last().unwrap().normalize()) < 1e-4);
+    }
 }

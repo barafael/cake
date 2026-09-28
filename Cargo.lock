@@ -2285,6 +2285,7 @@ dependencies = [
  "matchbox_signaling",
  "tokio",
  "web-sys",
+ "wgpu",
 ]
 
 [[package]]

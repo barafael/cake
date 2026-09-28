@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy_matchbox::prelude::*;
 use cake_net::{CH_RELIABLE, NetMsg, NetState, broadcast, decode, send_to};
 
-use crate::lobby::{Lobby, sync_peers};
+use crate::lobby::{Lobby, PendingStart, sync_peers};
 use crate::{AppState, Match, TICK_SECS};
 
 pub fn plugin(app: &mut App) {
@@ -32,6 +32,7 @@ fn pump(
     mut net: ResMut<NetState>,
     mut m: ResMut<Match>,
     mut lobby: ResMut<Lobby>,
+    mut pending: ResMut<PendingStart>,
 ) {
     let outbox = std::mem::take(&mut m.outbox);
     let Some(mut socket) = socket else {
@@ -113,7 +114,7 @@ fn pump(
             // The host dealt a rematch while I was still looking at this one:
             // go back through the lobby, which starts it.
             NetMsg::Start { players } => {
-                lobby.pending = Some((players, from));
+                pending.0 = Some((players, from));
                 next.set(AppState::Lobby);
             }
             NetMsg::Roster(members) if Some(from) == m.host_peer => lobby.members = members,

@@ -161,14 +161,76 @@ Classic RTS micro:
 The view is rotated so your HQ sits at the bottom, with your neighbours to
 the left and right.
 
+Every clickable control lives inside the circle. In a match, the selected
+unit's menu is a row of ring segments just inside the band (radius 350 to
+400), on the lower arc by my HQ: with the HQ selected, production and cancel;
+with units selected, attack, stop, and for utilities turret and deploy. Each
+segment names its action along the arc, with its key and price.
+
+Drag-selecting draws a rectangle in polar coordinates around the ring's
+centre: two sides are radii and two are arcs, which fits a ring far better
+than a screen rectangle.
+
+In the lobby the ring shows who would sit where, and it animates: a new
+player's sector opens and pushes the others aside, and a leaver's closes.
+Players' names run along the ring beyond the map, each in their own sector,
+flipping on the lower half of the screen so they never read upside down.
+
+When the game opens, the circle and everything in it grows out of the centre
+to full size over one second, easing out.
+
+## The circle window
+
+On desktop the game *is* the circle: a frameless, transparent window of
+which only a disk shows. Its outer ring (radius 512 to 600 of 600) simply
+continues the nebula, and is the window chrome:
+
+- drag the ring to move the window;
+- drag its outermost band to resize, in the direction of the edge grabbed;
+- slices of the ring on its top arc, each with a large icon: close,
+  maximise, minimise, pin always-on-top, and switch to a normal window.
+  Players' names step aside for them.
+
+A move or resize hands the pointer to the compositor, which keeps the
+button's release to itself. So the game lets go of the button the moment it
+asks for the move (and forgets all buttons whenever the pointer re-enters the
+window): a button left "held" would make the next real press not count, and
+every action on the frame would take two clicks.
+
+What the platform allows, as found for Bevy 0.19 / winit 0.30:
+
+| Capability | Support |
+|---|---|
+| Frameless, transparent window | Linux Wayland and X11 with a compositor, macOS. On Windows the corners stay black: its swapchains are opaque. |
+| Drag-move, drag-resize, minimise, maximise from our own chrome | Everywhere on desktop (`start_drag_move`, `start_drag_resize`). |
+| Always on top | winit can't on Wayland. On KDE Plasma the pin runs a one-line KWin script over D-Bus that sets `keepAbove` on this process's window; on other Wayland desktops the pin is dimmed. |
+| Clicks passing through the transparent corners | No. Hit-testing is all-or-nothing for the whole window, so the corners of the square window still take clicks. |
+
+Two Bevy details make the transparency work. The overlay camera copies to
+the window with a replace blend, since later cameras on a window are
+alpha-blended by default. The outside of the circle is cleared by a tiny
+custom material, because `ColorMaterial` forces alpha to 1 in opaque mode.
+`cargo run -p cake-bevy --example surface_probe` prints what a machine's
+surface supports.
+
+A normal decorated window is a setting: the button on the ring, or in the
+lobby. It is saved in `~/.config/cake/settings`, and `CAKE_WINDOW=windowed`
+or `CAKE_WINDOW=circle` overrides it for one run. The web build is always an
+ordinary page.
+
 ## Background
 
-Behind the ring hangs a faint procedural nebula, made with btl's algorithm
+The circle's background is a faint procedural nebula, made with btl's algorithm
 (github.com/barafael/btl): three random expression trees, one per colour
 channel, grown from a weighted grammar, compiled to stack bytecode and
-evaluated per pixel over `(x, y, t)`. `t` follows a two-minute sine, so the
+evaluated per pixel over `(x, y, t)`. `t` follows a one-minute sine, so the
 field slowly wavers back and forth. The seed is the room name, so everyone
 in a room sees the same sky.
+
+It fills the whole circle and stays put while the map zooms: a backdrop
+camera draws a dark disk and the nebula behind the map, and the overlay draws
+the same texture again on the ring beyond the map, mapped so the two meet
+without a seam.
 
 ## Architecture
 

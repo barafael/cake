@@ -8,25 +8,31 @@
 //!
 //! The seed comes from the room name, so everyone in a room shares one sky,
 //! as btl's server hands every client the same seed.
+//!
+//! The nebula fills the whole circle and stays put while the map zooms: a
+//! dark disk with the nebula over it on the backdrop layer, and the same
+//! texture again on the ring beyond the map (overlay layer), mapped so the two
+//! meet without a seam. The ring copy also hides the map where it would
+//! spill past its edge when zoomed in.
 
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::sprite_render::{AlphaMode2d, ColorMaterial, MeshMaterial2d};
 use cake_net::RoomId;
 
-/// Texture resolution. It is stretched over the whole map, and a nebula is
-/// soft anyway, so low resolution is fine (and cheap to re-render).
+use crate::camera::{BACKDROP_LAYER, OVERLAY_LAYER};
+use crate::chrome::{PLAY_RADIUS, RADIUS};
+use crate::{palette, ringmesh};
+
+/// Texture resolution. It is stretched over the whole circle, and a nebula
+/// is soft anyway, so low resolution is fine (and cheap to re-render).
 const SIZE: u32 = 128;
-/// World units the texture covers: the ring (diameter 1000) and a margin to
-/// fade out in.
-const EXTENT: f32 = 1500.0;
-/// Opaque inside this fraction of the radius, fading to nothing at the edge.
-/// 0.7 of 750 keeps the whole ring over full nebula.
-const FADE_START: f32 = 0.7;
 /// One full back-and-forth of the waver, in seconds.
-const WAVER_PERIOD_SECS: f32 = 120.0;
-/// Re-render at most this often. Over a two-minute cycle `t` moves at most
-/// ~0.005 between renders, far below what the eye catches at this opacity.
+const WAVER_PERIOD_SECS: f32 = 60.0;
+/// Re-render at most this often. Over a one-minute cycle `t` moves at most
+/// ~0.01 between renders, below what the eye catches at this opacity.
 const RENDER_INTERVAL_SECS: f32 = 0.1;
 /// btl's tint: faint violet, so the polylines stay the brightest thing.
 const TINT: Color = Color::srgba(0.5, 0.4, 0.8, 0.14);
@@ -45,7 +51,13 @@ struct Nebula {
     rendered_at: f32,
 }
 
-fn spawn(mut commands: Commands, room: Option<Res<RoomId>>, mut images: ResMut<Assets<Image>>) {
+fn spawn(
+    mut commands: Commands,
+    room: Option<Res<RoomId>>,
+    mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
     let seed = room.map_or(0x5EED, |r| cake_core::hash::fnv1a(r.0.as_bytes()));
     let programs = Programs::generate(seed);
     let image = images.add(Image::new(
@@ -59,15 +71,43 @@ fn spawn(mut commands: Commands, room: Option<Res<RoomId>>, mut images: ResMut<A
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     ));
+    // The backdrop: the dark disk, and the nebula over it.
+    let backdrop = RenderLayers::layer(BACKDROP_LAYER);
+    commands.spawn((
+        Mesh2d(meshes.add(Circle::new(RADIUS).mesh().resolution(256))),
+        MeshMaterial2d(materials.add(ColorMaterial::from_color(palette::BACKGROUND))),
+        Transform::from_xyz(0.0, 0.0, -20.0),
+        backdrop.clone(),
+    ));
     commands.spawn((
         Sprite {
             image: image.clone(),
-            custom_size: Some(Vec2::splat(EXTENT)),
+            custom_size: Some(Vec2::splat(2.0 * RADIUS)),
             color: TINT,
             ..default()
         },
-        // Behind everything; gizmos draw over it.
-        Transform::from_xyz(0.0, 0.0, -100.0),
+        Transform::from_xyz(0.0, 0.0, -10.0),
+        backdrop,
+    ));
+    // The same again on the ring beyond the map, over whatever the map drew.
+    let overlay = RenderLayers::layer(OVERLAY_LAYER);
+    let ring = meshes.add(ringmesh::ring(PLAY_RADIUS, RADIUS, RADIUS));
+    commands.spawn((
+        Mesh2d(ring.clone()),
+        MeshMaterial2d(materials.add(ColorMaterial::from_color(palette::BACKGROUND))),
+        Transform::from_xyz(0.0, 0.0, -30.0),
+        overlay.clone(),
+    ));
+    commands.spawn((
+        Mesh2d(ring),
+        MeshMaterial2d(materials.add(ColorMaterial {
+            color: TINT,
+            alpha_mode: AlphaMode2d::Blend,
+            texture: Some(image.clone()),
+            ..default()
+        })),
+        Transform::from_xyz(0.0, 0.0, -29.0),
+        overlay,
     ));
     commands.insert_resource(Nebula {
         programs,
@@ -76,6 +116,9 @@ fn spawn(mut commands: Commands, room: Option<Res<RoomId>>, mut images: ResMut<A
     });
 }
 
+/// Re-render the texture as `t` moves. Both the backdrop sprite and the ring
+/// material sample the same image, which is rewritten in place on the GPU,
+/// so both follow it.
 fn waver(time: Res<Time>, mut nebula: ResMut<Nebula>, mut images: ResMut<Assets<Image>>) {
     let now = time.elapsed_secs();
     if now - nebula.rendered_at < RENDER_INTERVAL_SECS {
@@ -92,23 +135,23 @@ fn waver(time: Res<Time>, mut nebula: ResMut<Nebula>, mut images: ResMut<Assets<
     }
 }
 
-/// The RGBA texture at time `t`, with a radial fade to transparent.
+/// The RGBA texture at time `t`: opaque over the circle, clear in the
+/// corners outside it (which a normal window shows).
 fn render(programs: &Programs, t: f32) -> Vec<u8> {
     let mut pixels = vec![0u8; (SIZE * SIZE * 4) as usize];
+    // One texel of soft edge.
+    let texel = 2.0 / SIZE as f32;
     for (i, px) in pixels.chunks_mut(4).enumerate() {
         let i = i as u32;
-        // Image rows run top to bottom; world y runs up.
-        let y = 1.0 - (i / SIZE) as f32 / SIZE as f32 * 2.0;
-        let x = (i % SIZE) as f32 / SIZE as f32 * 2.0 - 1.0;
+        // Sample texel centres. Image rows run top to bottom; y runs up.
+        let y = 1.0 - ((i / SIZE) as f32 + 0.5) / SIZE as f32 * 2.0;
+        let x = ((i % SIZE) as f32 + 0.5) / SIZE as f32 * 2.0 - 1.0;
         let dist = (x * x + y * y).sqrt();
-        let alpha = if dist <= FADE_START {
-            1.0
-        } else if dist >= 1.0 {
-            0.0
-        } else {
-            let f = (dist - FADE_START) / (1.0 - FADE_START);
-            1.0 - f * f * (3.0 - 2.0 * f)
-        };
+        let alpha = ((1.0 - dist) / texel + 0.5).clamp(0.0, 1.0);
+        if alpha == 0.0 {
+            // Outside the circle: never seen, so not worth evaluating.
+            continue;
+        }
         px[0] = channel(eval(&programs.r, x, y, t));
         px[1] = channel(eval(&programs.g, x, y, t));
         px[2] = channel(eval(&programs.b, x, y, t));
@@ -379,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn the_texture_is_opaque_at_the_centre_and_clear_at_the_corners() {
+    fn the_texture_is_opaque_over_the_circle_and_clear_at_the_corners() {
         let pixels = render(&Programs::generate(7), 0.3);
         assert_eq!(pixels.len(), (SIZE * SIZE * 4) as usize);
         let alpha = |x: u32, y: u32| pixels[((y * SIZE + x) * 4 + 3) as usize];

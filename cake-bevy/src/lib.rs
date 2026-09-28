@@ -12,14 +12,20 @@ use cake_core::stats::TICK_HZ;
 use cake_core::{Command, Entity, EntityId, Event, Seat, Sim};
 use cake_net::{HASH_INTERVAL, HashLog, Member, NetState, Sequencer, Signaling, TurnBuffer};
 
+pub mod arctext;
 pub mod camera;
+pub mod chrome;
 pub mod hud;
 pub mod input;
 pub mod lobby;
+pub mod lobby_ring;
 pub mod lockstep;
+pub mod menu;
 pub mod nebula;
 pub mod palette;
 pub mod render;
+pub mod ringmesh;
+pub mod settings;
 pub mod web;
 
 /// Seconds per simulation tick.
@@ -231,10 +237,15 @@ pub fn logic_plugin(app: &mut App) {
         .add_plugins((lobby::plugin, lockstep::plugin));
 }
 
-/// The window side: camera, drawing, input and HUD.
+/// The window side: camera, chrome, drawing, input and HUD. Expects a
+/// [`settings::Settings`] resource (see `main`).
 pub fn view_plugin(app: &mut App) {
     app.add_plugins((
+        arctext::plugin,
         camera::plugin,
+        chrome::plugin,
+        lobby_ring::plugin,
+        menu::plugin,
         nebula::plugin,
         render::plugin,
         input::plugin,

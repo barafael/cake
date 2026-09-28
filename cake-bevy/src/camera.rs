@@ -1,15 +1,60 @@
-//! The camera: the whole ring fits the window, and the view is turned so my
-//! HQ sits at the bottom, with my two neighbours to the left and right.
+//! Three cameras, drawn in this order into one shared texture.
+//!
+//! The **backdrop** camera is fixed: the circle's dark disk and the nebula.
+//!
+//! The **main** camera looks at the map: the whole ring fits the window, the
+//! view is turned so my HQ sits at the bottom with my neighbours to the left
+//! and right, and it zooms and pans.
+//!
+//! The **overlay** camera is fixed too, and draws on top: the ring beyond the
+//! map, the window chrome, players' names and the UI.
+//!
+//! The fixed cameras measure in "circle units": the circle (radius 600)
+//! always fits the window. At zoom 1 the map camera agrees, so the map's ring
+//! sits exactly inside the frame.
+//!
+//! When the app opens, everything grows out of the centre: see [`Opening`].
 
-use bevy::camera::ScalingMode;
+use bevy::camera::{CameraOutputMode, ScalingMode};
+use bevy::camera::visibility::RenderLayers;
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
+use bevy::render::render_resource::BlendState;
+use bevy::ui::IsDefaultUiCamera;
 use bevy::window::PrimaryWindow;
 
-use crate::{AppState, Match};
+use crate::chrome::{PointerBlocked, PointerSet, RADIUS};
+use crate::settings::{Settings, WindowStyle};
+use crate::{AppState, Match, palette};
 
-/// World units that always fit the window: the ring plus a margin.
-const FRAME: f32 = 1080.0;
+/// Units that always fit the window: the whole circle, frame included.
+const FRAME: f32 = 2.0 * RADIUS;
+/// The render layer of the chrome and anything else fixed to the window.
+pub const OVERLAY_LAYER: usize = 1;
+/// The render layer of the circle's backdrop.
+pub const BACKDROP_LAYER: usize = 2;
+const OPENING_SECS: f32 = 1.0;
+
+/// The opening animation: the circle and all it holds grow from a point in
+/// the centre to full size.
+#[derive(Resource, Debug, Default)]
+pub struct Opening {
+    t: f32,
+}
+
+impl Opening {
+    /// How big everything is: 0 at first, 1 when open. Eased out, so it
+    /// starts quickly and settles.
+    pub fn scale(&self) -> f32 {
+        let t = self.t.clamp(0.0, 1.0);
+        (1.0 - (1.0 - t).powi(3)).max(0.01)
+    }
+
+    pub fn done(&self) -> bool {
+        self.t >= 1.0
+    }
+}
+
 const MIN_ZOOM: f32 = 0.15;
 const MAX_ZOOM: f32 = 1.5;
 /// Keyboard pan speed, in screen-heights per second.
@@ -37,36 +82,100 @@ impl Default for Rig {
 #[derive(Component)]
 pub struct MainCamera;
 
-/// The cursor, in viewport pixels and in world units.
+#[derive(Component)]
+pub struct OverlayCamera;
+
+#[derive(Component)]
+pub struct BackdropCamera;
+
+/// The cursor: in viewport pixels, in world units, and in circle units.
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct Cursor {
     pub viewport: Option<Vec2>,
     pub world: Option<Vec2>,
+    pub ui: Option<Vec2>,
 }
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Rig>()
         .init_resource::<Cursor>()
+        .init_resource::<Opening>()
         .add_systems(Startup, spawn)
         .add_systems(OnEnter(AppState::Game), face_home)
         .add_systems(OnEnter(AppState::Lobby), |mut rig: ResMut<Rig>| *rig = Rig::default())
+        .add_systems(Update, track_cursor.in_set(PointerSet))
         .add_systems(
             Update,
-            (controls.run_if(in_state(AppState::Game)), apply, track_cursor).chain(),
+            (open, controls.run_if(in_state(AppState::Game)), apply)
+                .chain()
+                .after(PointerSet),
         );
 }
 
-fn spawn(mut commands: Commands) {
+fn fitted() -> Projection {
+    Projection::Orthographic(OrthographicProjection {
+        scaling_mode: ScalingMode::AutoMin {
+            min_width: FRAME,
+            min_height: FRAME,
+        },
+        ..OrthographicProjection::default_2d()
+    })
+}
+
+/// What the backdrop clears to: nothing around a circle window, the
+/// background colour in a normal one.
+pub fn backdrop_clear(style: WindowStyle) -> ClearColorConfig {
+    ClearColorConfig::Custom(match style {
+        WindowStyle::Circle => Color::NONE,
+        WindowStyle::Windowed => palette::BACKGROUND,
+    })
+}
+
+fn spawn(mut commands: Commands, settings: Res<Settings>) {
+    // All three render into the window's shared intermediate texture, and
+    // only the overlay copies it to the window, replacing what is there. That
+    // keeps the transparent pixels that make the circle window's corners
+    // see-through.
     commands.spawn((
         Camera2d,
+        Camera {
+            order: -1,
+            clear_color: backdrop_clear(settings.window),
+            output_mode: CameraOutputMode::Skip,
+            ..default()
+        },
+        BackdropCamera,
+        RenderLayers::layer(BACKDROP_LAYER),
+        fitted(),
+    ));
+    commands.spawn((
+        Camera2d,
+        Camera {
+            clear_color: ClearColorConfig::None,
+            output_mode: CameraOutputMode::Skip,
+            ..default()
+        },
         MainCamera,
-        Projection::Orthographic(OrthographicProjection {
-            scaling_mode: ScalingMode::AutoMin {
-                min_width: FRAME,
-                min_height: FRAME,
+        fitted(),
+    ));
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: 1,
+            clear_color: ClearColorConfig::None,
+            // Replace, not blend: as the second camera on the window it would
+            // otherwise be blended over by default, and the chrome's
+            // transparent pixels would never reach the window.
+            output_mode: CameraOutputMode::Write {
+                blend_state: Some(BlendState::REPLACE),
+                clear_color: ClearColorConfig::None,
             },
-            ..OrthographicProjection::default_2d()
-        }),
+            ..default()
+        },
+        OverlayCamera,
+        IsDefaultUiCamera,
+        RenderLayers::layer(OVERLAY_LAYER),
+        fitted(),
     ));
 }
 
@@ -91,6 +200,7 @@ fn controls(
     scroll: Res<AccumulatedMouseScroll>,
     motion: Res<bevy::input::mouse::AccumulatedMouseMotion>,
     cursor: Res<Cursor>,
+    blocked: Res<PointerBlocked>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut rig: ResMut<Rig>,
 ) {
@@ -102,7 +212,7 @@ fn controls(
         MouseScrollUnit::Line => scroll.delta.y,
         MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
     };
-    if lines != 0.0 {
+    if lines != 0.0 && !blocked.0 {
         let old = rig.zoom;
         let new = (old * 0.88f32.powf(lines)).clamp(MIN_ZOOM, MAX_ZOOM);
         if let Some(at) = cursor.world {
@@ -144,28 +254,54 @@ fn controls(
     }
 }
 
-fn apply(rig: Res<Rig>, mut camera: Query<(&mut Transform, &mut Projection), With<MainCamera>>) {
-    let Ok((mut tf, mut projection)) = camera.single_mut() else {
-        return;
-    };
-    tf.translation = rig.pan.extend(tf.translation.z);
-    tf.rotation = Quat::from_rotation_z(rig.rotation);
-    if let Projection::Orthographic(ortho) = projection.as_mut()
-        && ortho.scale != rig.zoom
+/// Advance the opening. Each frame counts at most a thirtieth of a second,
+/// so the slow first frames (shaders compiling) cannot swallow it.
+fn open(time: Res<Time>, mut opening: ResMut<Opening>) {
+    if !opening.done() {
+        opening.t = (opening.t + time.delta_secs().min(1.0 / 30.0) / OPENING_SECS).min(1.0);
+    }
+}
+
+fn apply(
+    rig: Res<Rig>,
+    opening: Res<Opening>,
+    mut main: Query<(&mut Transform, &mut Projection), With<MainCamera>>,
+    // The overlay and the backdrop: every other camera is fixed.
+    mut fixed: Query<&mut Projection, (With<Camera>, Without<MainCamera>)>,
+) {
+    let grow = opening.scale();
+    if let Ok((mut tf, mut projection)) = main.single_mut() {
+        tf.translation = rig.pan.extend(tf.translation.z);
+        tf.rotation = Quat::from_rotation_z(rig.rotation);
+        set_scale(&mut projection, rig.zoom / grow);
+    }
+    for mut projection in &mut fixed {
+        set_scale(&mut projection, 1.0 / grow);
+    }
+}
+
+fn set_scale(projection: &mut Projection, scale: f32) {
+    if let Projection::Orthographic(ortho) = projection
+        && ortho.scale != scale
     {
-        ortho.scale = rig.zoom;
+        ortho.scale = scale;
     }
 }
 
 fn track_cursor(
     window: Single<&Window, With<PrimaryWindow>>,
-    camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    main: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    overlay: Query<(&Camera, &GlobalTransform), With<OverlayCamera>>,
     mut cursor: ResMut<Cursor>,
 ) {
     let viewport = window.cursor_position();
-    let world = viewport.and_then(|p| {
-        let (camera, tf) = camera.single().ok()?;
-        camera.viewport_to_world_2d(tf, p).ok()
-    });
-    *cursor = Cursor { viewport, world };
+    let through = |camera: Result<(&Camera, &GlobalTransform), _>| {
+        let (camera, tf) = camera.ok()?;
+        camera.viewport_to_world_2d(tf, viewport?).ok()
+    };
+    *cursor = Cursor {
+        viewport,
+        world: through(main.single()),
+        ui: through(overlay.single()),
+    };
 }

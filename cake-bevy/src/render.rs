@@ -11,12 +11,16 @@ use cake_core::{Entity, Event, Order, Pos, Seat};
 
 use crate::camera::{Cursor, Rig};
 use crate::input::{Drag, Mode, Selection};
-use crate::lobby::Lobby;
-use crate::palette;
+use crate::{palette, ringmesh};
 use crate::{AppState, Match};
 
-const INNER: f32 = (R_INNER / UNIT) as f32;
-const OUTER: f32 = (R_OUTER / UNIT) as f32;
+pub const INNER: f32 = (R_INNER / UNIT) as f32;
+pub const OUTER: f32 = (R_OUTER / UNIT) as f32;
+
+/// `a` as a counter-clockwise turn in `[0, TAU)`.
+fn wrap_turn(a: f32) -> f32 {
+    a.rem_euclid(std::f32::consts::TAU)
+}
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Effects>()
@@ -25,7 +29,6 @@ pub fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                draw_lobby.run_if(in_state(AppState::Lobby)),
                 (collect_effects, draw_game)
                     .chain()
                     .run_if(in_state(AppState::Game).and_then(resource_exists::<Match>)),
@@ -173,43 +176,41 @@ fn draw_shape(gizmos: &mut Gizmos, shapes: &Shapes, kind: Kind, at: Vec2, dir: V
     }
 }
 
-/// An arc of the ring between two angles (radians, counter-clockwise).
-fn arc_points(radius: f32, from: f32, to: f32) -> impl Iterator<Item = Vec2> {
-    let span = (to - from).rem_euclid(std::f32::consts::TAU);
-    let n = ((span / std::f32::consts::TAU) * 256.0).ceil().max(2.0) as usize;
-    (0..=n).map(move |k| Vec2::from_angle(from + span * k as f32 / n as f32) * radius)
+/// One player's stretch of the ring, for [`draw_ring`].
+pub struct Sector {
+    /// Angles, counter-clockwise from `from` to `to`.
+    pub from: f32,
+    pub to: f32,
+    pub color: Color,
+    /// How present the sector is, 0 to 1: dims its divider as it opens or
+    /// closes.
+    pub fade: f32,
 }
 
-fn draw_ring(gizmos: &mut Gizmos, seats: usize, color_of: impl Fn(usize) -> Color) {
+/// The band's two edges, and each sector's colour just outside it, with a
+/// divider where one sector ends and the next begins.
+pub fn draw_ring(gizmos: &mut Gizmos, sectors: &[Sector]) {
     gizmos
         .circle_2d(Isometry2d::IDENTITY, INNER, palette::RING)
         .resolution(512);
     gizmos
         .circle_2d(Isometry2d::IDENTITY, OUTER, palette::RING)
         .resolution(512);
-    if seats == 0 {
-        return;
-    }
-    for i in 0..seats {
-        let edge = sector_edge(i, seats).to_radians() as f32;
-        let prev = sector_edge((i + seats - 1) % seats, seats).to_radians() as f32;
-        let dir = Vec2::from_angle(edge);
-        if seats > 1 {
-            gizmos.line_2d(dir * INNER, dir * OUTER, palette::FAINT);
+    let shared = sectors.iter().filter(|s| s.to > s.from).count() > 1;
+    for s in sectors.iter().filter(|s| s.to > s.from) {
+        if shared {
+            let edge = Vec2::from_angle(s.to);
+            gizmos.line_2d(edge * INNER, edge * OUTER, palette::FAINT.with_alpha(0.25 * s.fade));
         }
-        // Each sector's owner, as a coloured arc just outside the band.
-        let (from, to) = if seats == 1 {
-            (0.0, std::f32::consts::TAU - 0.001)
-        } else {
-            (prev + 0.01, edge - 0.01)
-        };
-        gizmos.linestrip_2d(arc_points(OUTER + 7.0, from, to), color_of(i));
+        // A small gap at each end once there are neighbours to be apart from.
+        let gap = if shared { 0.01 } else { 0.0 };
+        if s.to - s.from > 2.0 * gap {
+            gizmos.linestrip_2d(
+                ringmesh::arc(OUTER + 7.0, s.from + gap, s.to - s.from - 2.0 * gap),
+                s.color,
+            );
+        }
     }
-}
-
-fn draw_lobby(mut gizmos: Gizmos, lobby: Res<Lobby>) {
-    let n = lobby.players().count();
-    draw_ring(&mut gizmos, n, palette::seat);
 }
 
 fn collect_effects(time: Res<Time>, mut fx: ResMut<Effects>, mut m: ResMut<Match>) {
@@ -283,17 +284,23 @@ fn draw_game(
     mode: Res<Mode>,
     cursor: Res<Cursor>,
     drag: Res<Drag>,
-    camera: Query<(&Camera, &GlobalTransform), With<crate::camera::MainCamera>>,
 ) {
     let sim = &m.sim;
-    draw_ring(&mut gizmos, sim.seats(), |i| {
-        let c = palette::seat(i);
-        if sim.is_alive(i as Seat) {
-            c
-        } else {
-            c.with_alpha(0.2)
-        }
-    });
+    let n = sim.seats();
+    let sectors: Vec<Sector> = (0..n)
+        .map(|i| {
+            let from = sector_edge((i + n - 1) % n, n).to_radians() as f32;
+            let to = sector_edge(i, n).to_radians() as f32;
+            Sector {
+                from,
+                // The span, counter-clockwise; a lone seat has the whole ring.
+                to: from + if n == 1 { std::f32::consts::TAU } else { wrap_turn(to - from) },
+                color: palette::seat_status(i, sim.is_alive(i as Seat)),
+                fade: 1.0,
+            }
+        })
+        .collect();
+    draw_ring(&mut gizmos, &sectors);
 
     let screen_right = Vec2::from_angle(rig.rotation);
     let screen_up = screen_right.perp();
@@ -426,23 +433,11 @@ fn draw_game(
         }
     }
 
-    // The selection box, in screen space.
-    if let (Some(start), Some(end)) = (drag.start, cursor.viewport)
-        && drag.is_box(end)
-        && let Ok((camera, tf)) = camera.single()
+    // The selection region: a rectangle in polar coordinates, two radii and
+    // two arcs around the ring's centre.
+    if let (Some(end), Some(world)) = (cursor.viewport, cursor.world)
+        && let Some(region) = drag.region(end, world)
     {
-        let corners = [
-            start,
-            Vec2::new(end.x, start.y),
-            end,
-            Vec2::new(start.x, end.y),
-        ];
-        let world: Vec<Vec2> = corners
-            .iter()
-            .filter_map(|c| camera.viewport_to_world_2d(tf, *c).ok())
-            .collect();
-        if world.len() == 4 {
-            gizmos.lineloop_2d(world, palette::SELECTED.with_alpha(0.6));
-        }
+        gizmos.lineloop_2d(region.outline(), palette::SELECTED.with_alpha(0.6));
     }
 }
