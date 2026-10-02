@@ -36,13 +36,32 @@ fn room_from_fragment(fragment: &str) -> Option<RoomId> {
     None
 }
 
-/// Publish the room in the URL so the address bar is a share link. No-op on
-/// native.
+/// Publish the room in the URL so the address bar is a share link, leaving
+/// any other fragment params alone. No-op on native.
 pub fn share_room(room: &RoomId) {
     #[cfg(target_family = "wasm")]
-    write_fragment(&format!("room={}", room.0));
+    write_fragment(&with_fragment_param(
+        &read_fragment().unwrap_or_default(),
+        "room",
+        &room.0,
+    ));
     #[cfg(not(target_family = "wasm"))]
     let _ = room;
+}
+
+/// `fragment` (with or without its `#`) with `key` set to `value`, every
+/// other pair kept in place, so the room never clobbers state another part
+/// of the app keeps in the fragment. Returned without the leading `#`.
+#[cfg(any(target_family = "wasm", test))]
+fn with_fragment_param(fragment: &str, key: &str, value: &str) -> String {
+    let fragment = fragment.strip_prefix('#').unwrap_or(fragment);
+    let mut pairs: Vec<String> = fragment
+        .split(['&', ';'])
+        .filter(|pair| !pair.is_empty() && pair.split('=').next() != Some(key))
+        .map(str::to_string)
+        .collect();
+    pairs.push(format!("{key}={value}"));
+    pairs.join("&")
 }
 
 /// Unambiguous lowercase, so a room read aloud survives the trip.
@@ -116,9 +135,21 @@ fn read_fragment() -> Option<String> {
     web_sys::window()?.location().hash().ok()
 }
 
+/// Replace the page's fragment in place: no navigation and no history
+/// entry, so Back never lands on a bare page that redirects forward again.
 #[cfg(target_family = "wasm")]
 fn write_fragment(fragment: &str) {
-    if let Some(window) = web_sys::window() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let url = format!("#{fragment}");
+    let written = match window.history() {
+        Ok(history) => history
+            .replace_state_with_url(&web_sys::wasm_bindgen::JsValue::NULL, "", Some(&url))
+            .is_ok(),
+        Err(_) => false,
+    };
+    if !written {
         let _ = window.location().set_hash(fragment);
     }
 }
@@ -136,6 +167,16 @@ mod tests {
         );
         assert_eq!(room_from_fragment("#room=a/b"), None);
         assert_eq!(room_from_fragment(""), None);
+    }
+
+    #[test]
+    fn sharing_a_room_keeps_other_fragment_params() {
+        assert_eq!(with_fragment_param("#x=1", "room", "r1"), "x=1&room=r1");
+        assert_eq!(
+            with_fragment_param("#room=old&x=1", "room", "new"),
+            "x=1&room=new"
+        );
+        assert_eq!(with_fragment_param("", "room", "r"), "room=r");
     }
 
     #[test]
