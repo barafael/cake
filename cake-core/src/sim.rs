@@ -130,6 +130,7 @@ pub enum Event {
         kind: Kind,
         pos: Pos,
     },
+    /// A finished structure, a deployed utility, or a fresh unit.
     Completed {
         owner: Seat,
         kind: Kind,
@@ -596,6 +597,11 @@ impl Sim {
             let at = hq.pos.displaced(dt, dr);
             let far = hq.pos.dist(rally) > reach;
             let id = self.spawn(s, kind, at, true);
+            self.events.push(Event::Completed {
+                owner: s,
+                kind,
+                pos: at,
+            });
             if far {
                 let i = self.entities.len() - 1;
                 debug_assert_eq!(self.entities[i].id, id);

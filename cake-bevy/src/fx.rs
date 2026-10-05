@@ -29,6 +29,15 @@ const TRAIL_HZ: f32 = 30.0;
 const BURN_HZ: f32 = 6.0;
 /// How long a hurt entity flashes, in seconds.
 const HURT_SECS: f32 = 0.15;
+/// A moving unit's wake: this many points, drawn under the shapes.
+const WAKE_POINTS: usize = 8;
+/// How far a unit must travel between wake points, in map units.
+const WAKE_STEP: f32 = 0.5;
+/// A scorched stain lingers where a building fell, this long.
+const STAIN_SECS: f32 = 45.0;
+/// A slow circulation around the ring carries smoke and embers the way
+/// everything on it moves: counter-clockwise. Map units per second.
+const RING_WIND: f32 = 5.0;
 
 const FLAME: Color = Color::srgb(1.0, 0.72, 0.35);
 const HEAT: Color = Color::srgb(1.0, 0.9, 0.7);
@@ -45,6 +54,7 @@ pub fn plugin(app: &mut App) {
             Update,
             (
                 collect.before(render::draw_game),
+                wakes.before(render::draw_game),
                 draw.after(render::draw_game),
             )
                 .run_if(in_state(AppState::Game).and_then(resource_exists::<Match>)),
@@ -66,10 +76,26 @@ pub struct Fx {
     health: Vec<(EntityId, i32)>,
     /// Entities hit lately, and how brightly they still flash (1 to 0).
     hurt: Vec<(EntityId, f32)>,
+    /// Moving units' recent positions, in id order, drawn as wakes.
+    wakes: Vec<Wake>,
     rng: Rng,
     /// Emission owed to missile trails and burning buildings.
     trail_clock: f32,
     burn_clock: f32,
+}
+
+/// A unit's recent positions, oldest kept at `head - len`.
+struct Wake {
+    id: EntityId,
+    points: [Vec2; WAKE_POINTS],
+    len: usize,
+    head: usize,
+}
+
+impl Wake {
+    fn point(&self, j: usize) -> Vec2 {
+        self.points[(self.head + WAKE_POINTS - self.len + j) % WAKE_POINTS]
+    }
 }
 
 impl Fx {
@@ -252,6 +278,17 @@ impl Fx {
             FLAME,
         );
         if structure {
+            // The ring keeps a scorched stain where it stood, fading long
+            // after the embers are out.
+            self.marks.push(Mark {
+                at,
+                age: -0.3,
+                ttl: STAIN_SECS,
+                color,
+                look: Look::Stain {
+                    size: radius * 1.15,
+                },
+            });
             self.embers(at, 18, (20.0, 70.0), FLAME);
             self.smoke(at, 8, (radius * 0.4, radius * 1.4), 12.0, (1.2, 2.2));
             self.marks.push(Mark {
@@ -360,6 +397,8 @@ enum Look {
     Muzzle { dir: Vec2, len: f32 },
     /// A finished structure's outline, rippling out.
     Ripple { size: f32 },
+    /// Scorched ground where a building stood, fading slowly.
+    Stain { size: f32 },
 }
 
 struct Particle {
@@ -422,6 +461,16 @@ pub fn collect(time: Res<Time>, mut fx: ResMut<Fx>, mut m: ResMut<Match>, shapes
         let slow = (-p.drag * dt).exp();
         p.vel *= slow;
         p.pos += p.vel * dt;
+        // The ring's slow circulation, carrying smoke and embers the way
+        // everything on it moves.
+        let wind = match p.mote {
+            Mote::Smoke { .. } => RING_WIND,
+            Mote::Ember { .. } => RING_WIND * 0.5,
+            _ => 0.0,
+        };
+        if wind != 0.0 {
+            p.pos += p.pos.normalize_or(Vec2::X).perp() * (wind * dt);
+        }
         if let Mote::Shard { angle, spin, .. } = &mut p.mote {
             *angle += *spin * dt;
             *spin *= slow;
@@ -476,7 +525,8 @@ pub fn collect(time: Res<Time>, mut fx: ResMut<Fx>, mut m: ResMut<Match>, shapes
         }
     }
 
-    // Whatever lost health since last frame flashes.
+    // Whatever lost health since last frame flashes, and moving units lay
+    // down a wake.
     let mut health = Vec::with_capacity(m.sim.entities.len());
     for e in &m.sim.entities {
         let before = fx
@@ -490,8 +540,12 @@ pub fn collect(time: Res<Time>, mut fx: ResMut<Fx>, mut m: ResMut<Match>, shapes
             }
         }
         health.push((e.id, e.hp));
+        if e.kind.is_mobile() && e.hp > 0 && m.sees(e) {
+            lay_wake(&mut fx.wakes, e.id, m.draw_pos(e));
+        }
     }
     fx.health = health;
+    fx.wakes.retain(|w| m.sim.get(w.id).is_some());
 
     // Missiles leave smoke, plasma sheds sparks.
     fx.trail_clock = (fx.trail_clock + dt).min(3.0 / TRAIL_HZ);
@@ -543,6 +597,54 @@ pub fn collect(time: Res<Time>, mut fx: ResMut<Fx>, mut m: ResMut<Match>, shapes
     if fx.particles.len() > MAX_PARTICLES {
         let excess = fx.particles.len() - MAX_PARTICLES;
         fx.particles.drain(..excess);
+    }
+}
+
+/// Record `at` as the newest point of `id`'s wake; a unit standing still
+/// retracts its wake from the tail instead.
+fn lay_wake(wakes: &mut Vec<Wake>, id: EntityId, at: Vec2) {
+    match wakes.binary_search_by_key(&id, |w| w.id) {
+        Ok(i) => {
+            let w = &mut wakes[i];
+            let moving = w.len == 0 || w.point(w.len - 1).distance(at) >= WAKE_STEP;
+            if moving {
+                w.points[w.head] = at;
+                w.head = (w.head + 1) % WAKE_POINTS;
+                w.len = (w.len + 1).min(WAKE_POINTS);
+            } else {
+                // Standing still: the wake retracts behind it.
+                w.len -= 1;
+            }
+        }
+        Err(i) => {
+            wakes.insert(
+                i,
+                Wake {
+                    id,
+                    points: [at; WAKE_POINTS],
+                    len: 1,
+                    head: 1 % WAKE_POINTS,
+                },
+            );
+        }
+    }
+}
+
+/// Wakes drawn under the shapes: a fading line through the unit's recent
+/// positions, in its own colour.
+fn wakes(fx: Res<Fx>, m: Res<Match>, mut gizmos: Gizmos) {
+    for w in &fx.wakes {
+        let Some(e) = m.sim.get(w.id) else {
+            continue;
+        };
+        if !m.sees(e) || w.len < 2 {
+            continue;
+        }
+        let color = palette::seat(e.owner as usize);
+        for j in 0..w.len - 1 {
+            let a = (j + 1) as f32 / w.len as f32;
+            gizmos.line_2d(w.point(j), w.point(j + 1), color.with_alpha(0.22 * a));
+        }
     }
 }
 
@@ -690,6 +792,16 @@ fn draw(
             }
             Look::Ripple { size } => {
                 circle(&mut gizmos, at, size + 10.0 * t, mk.color.with_alpha(fade));
+            }
+            Look::Stain { size } => {
+                // Ash in the player's colour, most of the way to black: it
+                // dims whatever is drawn over it, like a scorch shadow.
+                let ash = mk.color.mix(&Color::BLACK, 0.78);
+                let linger = fade * fade;
+                circle(&mut gizmos, at, size, ash.with_alpha(0.16 * linger));
+                gizmos
+                    .circle_2d(Isometry2d::from_translation(at), size, ash.with_alpha(0.1 * linger))
+                    .resolution(24);
             }
         }
     }

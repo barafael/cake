@@ -256,6 +256,7 @@ pub fn draw_ring(gizmos: &mut Gizmos, sectors: &[Sector]) {
 #[allow(clippy::too_many_arguments)]
 pub fn draw_game(
     mut gizmos: Gizmos,
+    time: Res<Time>,
     m: Res<Match>,
     mut glow: Gizmos<GlowGizmos>,
     shapes: Res<Shapes>,
@@ -342,13 +343,25 @@ pub fn draw_game(
         let radius = (e.radius() / UNIT) as f32;
         let selected = selection.ids.contains(&e.id);
         if selected {
+            // The ring breathes, so a resting selection still reads as live.
+            let breathe = (time.elapsed_secs() * 2.4).sin() * 0.8;
             gizmos
                 .circle_2d(
                     Isometry2d::from_translation(at),
-                    radius + 4.0,
+                    radius + 4.0 + breathe,
                     palette::SELECTED,
                 )
                 .resolution(24);
+        }
+        // Busy fighting: a spark at its heart, so who is shooting reads
+        // through a crowd.
+        if e.target.is_some() {
+            glow
+                .circle_2d(Isometry2d::from_translation(at), 4.0, palette::TEXT.with_alpha(0.2))
+                .resolution(8);
+            gizmos
+                .circle_2d(Isometry2d::from_translation(at), 2.2, palette::TEXT.with_alpha(0.8))
+                .resolution(8);
         }
         if e.hp < e.max_hp() || selected {
             let width = (radius * 2.0).max(10.0);
