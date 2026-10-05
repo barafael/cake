@@ -205,6 +205,17 @@ enum Effect {
     DeployTick(Pos),
 }
 
+/// Supply income per tick for a seat with `econ` finished economy buildings.
+fn income_of(econ: usize) -> i64 {
+    stats::HQ_INCOME + econ as i64 * stats::ECON_INCOME
+}
+
+/// How fast an HQ with `econ` finished economy buildings builds, in percent
+/// of the base pace.
+fn production_pct_of(econ: usize) -> u32 {
+    100 + econ as u32 * stats::ECON_PRODUCTION_PCT
+}
+
 impl Sim {
     /// A fresh match for `seats` players, each with an HQ at the centre of
     /// its sector, starting supply and one utility.
@@ -284,12 +295,28 @@ impl Sim {
         if !self.is_alive(seat) {
             return 0;
         }
-        stats::HQ_INCOME + self.econ_count(seat) as i64 * stats::ECON_INCOME
+        income_of(self.econ_count(seat))
     }
 
     /// How fast `seat`'s HQ builds, in percent of the base pace.
     pub fn production_pct(&self, seat: Seat) -> u32 {
-        100 + self.econ_count(seat) as u32 * stats::ECON_PRODUCTION_PCT
+        production_pct_of(self.econ_count(seat))
+    }
+
+    /// Per-seat tallies in one pass over the entities: finished economy
+    /// buildings, and mobile units. The economy and production phases both
+    /// want them, and each used to rescan per seat.
+    fn seat_tallies(&self) -> ([usize; MAX_SEATS], [usize; MAX_SEATS]) {
+        let mut econ = [0; MAX_SEATS];
+        let mut units = [0; MAX_SEATS];
+        for e in &self.entities {
+            if e.kind == Kind::Econ {
+                econ[e.owner as usize] += usize::from(e.complete);
+            } else if e.kind.is_mobile() {
+                units[e.owner as usize] += 1;
+            }
+        }
+        (econ, units)
     }
 
     pub fn unit_count(&self, seat: Seat) -> usize {
@@ -526,13 +553,19 @@ impl Sim {
     // ---- Economy and production -----------------------------------------
 
     fn economy(&mut self) {
+        let (econ, _) = self.seat_tallies();
         for seat in 0..self.seats() {
-            let income = self.income(seat as Seat);
+            let income = if self.is_alive(seat as Seat) {
+                income_of(econ[seat])
+            } else {
+                0
+            };
             self.players[seat].supply += income;
         }
     }
 
     fn production(&mut self) {
+        let (econ, units) = self.seat_tallies();
         for seat in 0..self.seats() {
             let s = seat as Seat;
             let p = &self.players[seat];
@@ -543,10 +576,10 @@ impl Sim {
                 continue;
             };
             if p.progress < kind.stats().build_ticks * 100 {
-                self.players[seat].progress += self.production_pct(s);
+                self.players[seat].progress += production_pct_of(econ[seat]);
                 continue;
             }
-            if self.unit_count(s) >= stats::UNIT_CAP {
+            if units[seat] >= stats::UNIT_CAP {
                 continue;
             }
             let Some(hq) = self.get(p.hq) else {
@@ -966,6 +999,9 @@ impl Sim {
                 landed.push((n, on_target));
             }
         }
+        if landed.is_empty() {
+            return;
+        }
         for &(n, on_target) in &landed {
             let p = &self.projectiles[n];
             let target = self.index_of(p.target);
@@ -1001,12 +1037,17 @@ impl Sim {
                 target: target.map(|t| self.entities[t].id),
             });
         }
-        let mut n = 0;
-        self.projectiles.retain(|_| {
-            let keep = !landed.iter().any(|(l, _)| *l == n);
-            n += 1;
-            keep
-        });
+        // Take the landed ones out, keeping firing order.
+        let mut keep = vec![true; self.projectiles.len()];
+        for &(n, _) in &landed {
+            keep[n] = false;
+        }
+        let flown = std::mem::take(&mut self.projectiles);
+        self.projectiles = flown
+            .into_iter()
+            .zip(keep)
+            .filter_map(|(p, keep)| keep.then_some(p))
+            .collect();
     }
 
     /// Units thrown by blasts slide, slowing as they go.
@@ -1052,16 +1093,16 @@ impl Sim {
     // ---- Deaths, elimination, victory ------------------------------------
 
     fn cleanup(&mut self) {
-        let fallen: Vec<Seat> = self
-            .entities
-            .iter()
-            .filter(|e| e.hp <= 0 && e.kind == Kind::Hq)
-            .map(|e| e.owner)
-            .collect();
+        let mut fallen = [false; MAX_SEATS];
+        for e in &self.entities {
+            if e.hp <= 0 && e.kind == Kind::Hq {
+                fallen[e.owner as usize] = true;
+            }
+        }
         // The dead, and everything a fallen player owned, go out with a bang.
         let mut blasts = Vec::new();
         for e in &self.entities {
-            let dies = e.hp <= 0 || fallen.contains(&e.owner);
+            let dies = e.hp <= 0 || fallen[e.owner as usize];
             if !dies || e.consumed {
                 continue;
             }
@@ -1074,7 +1115,7 @@ impl Sim {
                 blasts.push((e.pos, e.owner, blast));
             }
         }
-        for &seat in &fallen {
+        for seat in (0..self.seats() as Seat).filter(|&s| fallen[s as usize]) {
             let p = &mut self.players[seat as usize];
             p.alive = false;
             p.queue.clear();
@@ -1082,12 +1123,12 @@ impl Sim {
             self.events.push(Event::Eliminated(seat));
         }
         self.entities
-            .retain(|e| e.hp > 0 && !fallen.contains(&e.owner));
+            .retain(|e| e.hp > 0 && !fallen[e.owner as usize]);
         for (at, owner, blast) in blasts {
             self.blast(at, owner, blast);
         }
 
-        if !fallen.is_empty() && self.seats() > 1 {
+        if fallen.iter().any(|&f| f) && self.seats() > 1 {
             let alive: Vec<Seat> = (0..self.seats() as Seat)
                 .filter(|s| self.is_alive(*s))
                 .collect();
