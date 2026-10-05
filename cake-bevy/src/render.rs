@@ -269,6 +269,9 @@ pub fn draw_game(
 ) {
     let sim = &m.sim;
     let n = sim.seats();
+    // Screen-up, in world space: health rings start there and run clockwise,
+    // the same way the recap's time runs.
+    let top = rig.rotation + std::f32::consts::FRAC_PI_2;
     let sectors: Vec<Sector> = (0..n)
         .map(|i| {
             let from = sector_edge((i + n - 1) % n, n).to_radians() as f32;
@@ -288,9 +291,6 @@ pub fn draw_game(
         })
         .collect();
     draw_ring(&mut gizmos, &sectors);
-
-    let screen_right = Vec2::from_angle(rig.rotation);
-    let screen_up = screen_right.perp();
 
     for e in sim.entities.iter().filter(|e| m.sees(e)) {
         let at = m.draw_pos(e);
@@ -363,22 +363,35 @@ pub fn draw_game(
                 .circle_2d(Isometry2d::from_translation(at), 2.2, palette::TEXT.with_alpha(0.8))
                 .resolution(8);
         }
+        // Health is a ring around the body: a faint track the whole way
+        // round, and the fill running clockwise from the top of the screen,
+        // eroding back towards it as the health drains.
         if e.hp < e.max_hp() || selected {
-            let width = (radius * 2.0).max(10.0);
             let frac = (e.hp as f32 / e.max_hp() as f32).clamp(0.0, 1.0);
-            let start = at - screen_up * (radius + 5.0) - screen_right * width / 2.0;
-            gizmos.line_2d(start, start + screen_right * width, palette::FAINT);
-            let health = palette::BAD.mix(&palette::GOOD, frac);
-            gizmos.line_2d(start, start + screen_right * width * frac, health);
+            let bar = radius + 6.0;
+            gizmos
+                .circle_2d(Isometry2d::from_translation(at), bar, palette::FAINT)
+                .resolution(32);
+            if frac > 0.0 {
+                gizmos
+                    .arc_2d(
+                        Isometry2d::new(at, Rot2::radians(top - frac * std::f32::consts::TAU)),
+                        frac * std::f32::consts::TAU,
+                        bar,
+                        palette::BAD.mix(&palette::GOOD, frac),
+                    )
+                    .resolution(32);
+            }
         }
-        // A deploying utility shows its progress as a closing ring.
+        // A deploying utility shows its progress as a closing ring, running
+        // clockwise from the top like the health rings.
         if e.kind == Kind::Utility && e.progress > 0 {
             let frac = e.progress as f32 / stats::ECON.build_ticks as f32;
             gizmos
                 .arc_2d(
-                    Isometry2d::new(at, Rot2::radians(0.0)),
-                    std::f32::consts::TAU * frac,
-                    12.0,
+                    Isometry2d::new(at, Rot2::radians(top - frac * std::f32::consts::TAU)),
+                    frac * std::f32::consts::TAU,
+                    radius + 6.0,
                     color,
                 )
                 .resolution(24);
