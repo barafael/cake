@@ -477,4 +477,4 @@ holding eight or nine economy buildings, most of them on claimed land.
 - Replays from the turn log (the seed is just the roster).
 - GitHub Pages deployment of the web build.
 - Sound.
-- A spatial index for the simulation (a sort by angle is enough on a ring).
+- A spatial index for targeting too: vision and separation already scan only a window over the angle order.

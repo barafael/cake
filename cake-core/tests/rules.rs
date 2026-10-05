@@ -521,3 +521,67 @@ fn an_explosion_throws_light_units_further_than_heavy_ones() {
     assert!(r > 10 * UNIT, "the raider is thrown: {r}");
     assert!(r > 2 * b, "a brawler weighs more: raider {r}, brawler {b}");
 }
+
+#[test]
+fn the_vision_window_agrees_with_a_full_scan() {
+    use cake_core::geom::{R_INNER, R_OUTER, sector_edge};
+    // Economy buildings see, but never act: over a tick nothing moves and
+    // nothing dies, so the windowed pass over the angle order can be
+    // compared with a brute-force scan of the same positions. Pairs stand
+    // within and beyond one another's sight, near the sector edges (clear of
+    // every HQ's guns, so nothing shoots) and across the seam at angle zero.
+    let mut sim = Sim::new(4);
+    for seat in 0..4u8 {
+        let edge = Pos::new(sector_edge(seat as usize, 4), R_MID);
+        sim.place(seat, Kind::Econ, edge.displaced(-20 * UNIT, 0));
+        sim.place((seat + 1) % 4, Kind::Econ, edge.displaced(20 * UNIT, 0));
+        sim.place(seat, Kind::Econ, Pos::new(edge.a, R_OUTER - 20 * UNIT));
+        sim.place(
+            (seat + 2) % 4,
+            Kind::Econ,
+            Pos::new(edge.a, R_INNER + 25 * UNIT),
+        );
+    }
+    for (owner, spot) in [
+        // Radial pairs a hundred units along from the seam: near it...
+        (
+            0,
+            Pos::new(Angle(0), 425 * UNIT).displaced(100 * UNIT, 0),
+        ),
+        (
+            1,
+            Pos::new(Angle(0), 475 * UNIT).displaced(100 * UNIT, 0),
+        ),
+        // ...and one pair the exact test must still refuse.
+        (
+            2,
+            Pos::new(Angle(0), 420 * UNIT).displaced(-100 * UNIT, 0),
+        ),
+        (
+            3,
+            Pos::new(Angle(0), 488 * UNIT).displaced(-100 * UNIT, 0),
+        ),
+    ] {
+        sim.place(owner, Kind::Econ, spot);
+    }
+    // And one that must see across the seam backwards: a utility a hundred
+    // units behind angle zero sees the HQ sitting on it (102 reach against
+    // 100), while nothing of seat 0's reaches it (its guns stop at 66).
+    sim.place(
+        1,
+        Kind::Utility,
+        Pos::new(Angle(0), R_MID).displaced(-100 * UNIT, 0),
+    );
+
+    sim.step(&[]);
+    let seen: Vec<u8> = sim.entities.iter().map(|e| e.seen_by).collect();
+    let mut expect: Vec<u8> = sim.entities.iter().map(|e| 1u8 << e.owner).collect();
+    for (ti, t) in sim.entities.iter().enumerate() {
+        for v in sim.entities.iter() {
+            if v.pos.within(t.pos, v.stats().vision + t.radius()) {
+                expect[ti] |= 1u8 << v.owner;
+            }
+        }
+    }
+    assert_eq!(seen, expect);
+}

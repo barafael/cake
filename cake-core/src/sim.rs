@@ -1,17 +1,17 @@
 //! The simulation: state, and the fixed-tick step that advances it.
 //!
 //! Everything here is deterministic. Entities live in a `Vec` in id order,
-//! ids only ever increase, every scan goes in that order, and ties break on
-//! id. There are no hash maps and no randomness. Two peers that start from
-//! [`Sim::new`] and step through the same commands hold bit-identical state,
-//! which [`Sim::checksum`] lets them confirm.
+//! ids only ever increase, and ties break on id. There are no hash maps and
+//! no randomness. Two peers that start from [`Sim::new`] and step through the
+//! same commands hold bit-identical state, which [`Sim::checksum`] lets them
+//! confirm.
 
 use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
 use crate::command::{Command, MAX_UNITS_PER_COMMAND, PlaceError};
-use crate::geom::{Pos, R_MID, UNIT, isqrt, scaled, sector_center};
+use crate::geom::{Pos, R_MID, UNIT, isqrt, scaled, sector_center, span_of};
 use crate::stats::{self, Kind, Shot};
 
 pub type EntityId = u32;
@@ -554,9 +554,9 @@ impl Sim {
 
     fn economy(&mut self) {
         let (econ, _) = self.seat_tallies();
-        for seat in 0..self.seats() {
+        for (seat, buildings) in econ.iter().enumerate().take(self.seats()) {
             let income = if self.is_alive(seat as Seat) {
-                income_of(econ[seat])
+                income_of(*buildings)
             } else {
                 0
             };
@@ -612,19 +612,48 @@ impl Sim {
     fn vision(&mut self) {
         let n = self.entities.len();
         let mut seen: Vec<u8> = self.entities.iter().map(|e| 1u8 << e.owner).collect();
-        for (i, seen_i) in seen.iter_mut().enumerate() {
-            let target = &self.entities[i];
-            for j in 0..n {
-                let viewer = &self.entities[j];
-                let bit = 1u8 << viewer.owner;
-                if *seen_i & bit != 0 {
+        // Sight reaches a short way along the ring, and `within` rejects a
+        // pair on angle alone (see `geom::span_of`), so a sliding window over
+        // the angle order visits every pair that could pass the exact test,
+        // and only those. What a pair contributes is an OR of bits, so the
+        // order pairs come in cannot show: this is the full scan's result.
+        if n > 1 {
+            let all = (1u16 << self.seats()) - 1;
+            let max_vision = self
+                .entities
+                .iter()
+                .map(|e| e.stats().vision)
+                .max()
+                .unwrap_or(0);
+            let max_radius = self.entities.iter().map(Entity::radius).max().unwrap_or(0);
+            let half = span_of(max_vision + max_radius);
+            let ring = angle_order(&self.entities);
+            let (mut lo, mut hi) = (0usize, 0usize);
+            for c in n..2 * n {
+                let (centre, ti) = ring[c];
+                while hi < ring.len() && ring[hi].0 - centre <= half {
+                    hi += 1;
+                }
+                while centre - ring[lo].0 > half {
+                    lo += 1;
+                }
+                if seen[ti] as u16 == all {
                     continue;
                 }
-                if viewer
-                    .pos
-                    .within(target.pos, viewer.stats().vision + target.radius())
-                {
-                    *seen_i |= bit;
+                let target = &self.entities[ti];
+                for &(_, vi) in &ring[lo..hi] {
+                    if vi == ti {
+                        continue;
+                    }
+                    let viewer = &self.entities[vi];
+                    let bit = 1u8 << viewer.owner;
+                    if seen[ti] & bit == 0
+                        && viewer
+                            .pos
+                            .within(target.pos, viewer.stats().vision + target.radius())
+                    {
+                        seen[ti] |= bit;
+                    }
                 }
             }
         }
@@ -867,13 +896,33 @@ impl Sim {
     fn separate(&mut self) {
         let n = self.entities.len();
         let mut push: Vec<(i64, i64)> = vec![(0, 0); n];
-        for i in 0..n {
-            let a = &self.entities[i];
+        // Overlapping bodies lie within two radii of one another along the
+        // ring, so the same sliding window as vision's visits every pair that
+        // could pass the exact test, and only those. Each pair is handled
+        // once, from the smaller index's window, and each pair's contribution
+        // to the pushes is its own integer summand, so the sums are the full
+        // scan's whatever the order the pairs come in.
+        let max_radius = self.entities.iter().map(Entity::radius).max().unwrap_or(0);
+        let half = span_of(2 * max_radius);
+        let ring = angle_order(&self.entities);
+        let (mut lo, mut hi) = (0usize, 0usize);
+        for c in n..2 * n {
+            let (centre, ai) = ring[c];
+            while hi < ring.len() && ring[hi].0 - centre <= half {
+                hi += 1;
+            }
+            while centre - ring[lo].0 > half {
+                lo += 1;
+            }
+            let a = &self.entities[ai];
             if a.consumed {
                 continue;
             }
-            for j in (i + 1)..n {
-                let b = &self.entities[j];
+            for &(_, bi) in &ring[lo..hi] {
+                if bi <= ai {
+                    continue;
+                }
+                let b = &self.entities[bi];
                 if b.consumed || (a.kind.is_structure() && b.kind.is_structure()) {
                     continue;
                 }
@@ -896,10 +945,10 @@ impl Sim {
                     (false, true) => (0, overlap),
                     (false, false) => (0, 0),
                 };
-                push[i].0 -= ux * share_a / 1000;
-                push[i].1 -= uy * share_a / 1000;
-                push[j].0 += ux * share_b / 1000;
-                push[j].1 += uy * share_b / 1000;
+                push[ai].0 -= ux * share_a / 1000;
+                push[ai].1 -= uy * share_a / 1000;
+                push[bi].0 += ux * share_b / 1000;
+                push[bi].1 += uy * share_b / 1000;
             }
         }
         for (e, (t, r)) in self.entities.iter_mut().zip(push) {
@@ -1139,6 +1188,26 @@ impl Sim {
             };
         }
     }
+}
+
+/// The entities in angle order, copied three times over: at a turn below,
+/// at none, and at a turn above. Windows are taken for centres in the middle
+/// copy, so a window reaches across the seam at angle zero either way:
+/// backward into the lower copy, forward into the upper one.
+fn angle_order(entities: &[Entity]) -> Vec<(i64, usize)> {
+    const TURN: i64 = 1 << 32;
+    let mut sorted: Vec<(i64, usize)> = entities
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.pos.a.0 as i64, i))
+        .collect();
+    sorted.sort_unstable_by_key(|&(a, _)| a);
+    let n = sorted.len();
+    let mut ring = Vec::with_capacity(3 * n);
+    ring.extend(sorted.iter().map(|&(a, i)| (a - TURN, i)));
+    ring.extend(sorted.iter().copied());
+    ring.extend(sorted.iter().map(|&(a, i)| (a + TURN, i)));
+    ring
 }
 
 /// A projectile leaving `from` for `target`. Missiles set off sideways,

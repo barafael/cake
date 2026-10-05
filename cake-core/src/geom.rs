@@ -32,6 +32,14 @@ const TAU_DEN: i128 = 1_000_000_000;
 /// exact distance.
 const ANGLE_PER_MILLI_AT_INNER: i64 = 1710;
 
+/// The widest angle, at the inner edge of the band, that two points `range`
+/// milli-units of arc apart can differ by, rounded up. [`Pos::within`]
+/// rejects far pairs on this alone, and the simulation's scans use it to
+/// visit only the pairs that could pass it.
+pub fn span_of(range: i64) -> i64 {
+    range.saturating_mul(ANGLE_PER_MILLI_AT_INNER)
+}
+
 /// An angle, with one full turn = 2³². Zero is the +x axis, and positive
 /// deltas turn counter-clockwise.
 #[derive(
@@ -124,7 +132,7 @@ impl Pos {
     /// Is `other` within `range` of `self`? Far pairs are rejected on the
     /// angle alone, which is most pairs on a ring.
     pub fn within(self, other: Pos, range: i64) -> bool {
-        if other.a.delta(self.a).abs() > range.saturating_mul(ANGLE_PER_MILLI_AT_INNER) {
+        if other.a.delta(self.a).abs() > span_of(range) {
             return false;
         }
         self.dist2(other) <= range * range
