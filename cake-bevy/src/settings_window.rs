@@ -43,7 +43,7 @@ const DISMISS_MARGIN: f32 = 20.0;
 /// behind stays under.
 const DIAL_Z: f32 = 6.5;
 
-const PANEL_COLOUR: Color = Color::srgba(0.10, 0.105, 0.13, 0.82);
+const PANEL_COLOUR: Color = Color::srgba(0.10, 0.105, 0.13, 0.94);
 
 /// The two preview panes, under the effect segments. Their radius,
 /// centres, and the little scene inside: a plasma turret picking on a
@@ -507,7 +507,7 @@ fn animate(
         tf.translation = w.from.lerp(Vec2::ZERO, e).extend(DIAL_Z);
         tf.scale = Vec3::splat(0.04 + 0.96 * e);
     }
-    palette::tint(&mut materials, &w.backdrop, Color::BLACK.with_alpha(0.35 * e));
+    palette::tint(&mut materials, &w.backdrop, Color::BLACK.with_alpha(0.5 * e));
     if w.closing && w.t <= 0.0 {
         if let Ok(mut entity) = commands.get_entity(w.root) {
             entity.despawn();

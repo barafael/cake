@@ -17,14 +17,15 @@ use cake_core::stats::{self, Kind, SUPPLY, TICK_HZ};
 use cake_net::{NetState, RoomId};
 
 use crate::arctext::{ArcText, Frame};
-use crate::chrome::RADIUS;
+use crate::chrome::{ChromeButton, RADIUS};
 use crate::input::{Mode, Selection};
 use crate::lobby::{Lobby, LobbyAction, LobbyInput, display_name, my_key};
 use crate::menu::{MENU_INNER, MENU_OUTER};
+use crate::render::Shapes;
 use crate::ringmesh::Slots;
 use crate::segments::{self, Segment, SegmentFills, SegmentLabel, SegmentPressed};
 use crate::settings::{self, Settings};
-use crate::settings_window::SettingsWindow;
+use crate::settings_window::{self, SettingsWindow};
 use crate::{AppState, Match, palette};
 
 pub fn plugin(app: &mut App) {
@@ -47,6 +48,7 @@ pub fn plugin(app: &mut App) {
 pub enum UiAction {
     Lobby(LobbyAction),
     ToggleMode,
+    Settings,
     BackToLobby,
 }
 
@@ -192,17 +194,36 @@ fn text<'a>(
 
 // ---- Segments --------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn press_segments(
     mut pressed: MessageReader<SegmentPressed>,
     actions: Query<&UiAction>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    fills: Res<SegmentFills>,
+    shapes: Res<Shapes>,
     mut input: ResMut<LobbyInput>,
     mut settings: ResMut<Settings>,
     mut next: ResMut<NextState<AppState>>,
+    state: Res<State<AppState>>,
+    mut win: Option<ResMut<SettingsWindow>>,
 ) {
     for SegmentPressed(e) in pressed.read() {
         match actions.get(*e) {
             Ok(UiAction::Lobby(a)) => input.0.push(*a),
             Ok(UiAction::ToggleMode) => settings.mode = settings.mode.toggled(),
+            Ok(UiAction::Settings) => settings_window::toggle(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                &fills,
+                &shapes,
+                &settings,
+                ChromeButton::Settings.centre(),
+                *state.get(),
+                win.as_deref_mut(),
+            ),
             Ok(UiAction::BackToLobby) => next.set(AppState::Lobby),
             Err(_) => {}
         }
@@ -301,21 +322,36 @@ fn spawn_lobby(
             UiAction::Lobby(*action),
         );
     }
-    if settings::cake_supported() {
+    // The mode toggle only where cake mode exists; the settings dial is
+    // always reachable, which in window mode is here and only here.
+    let slots = if settings::cake_supported() { 2 } else { 1 };
+    if let Some(i) = settings::cake_supported().then_some(0) {
         let (title, detail) = mode_labels(&settings);
         segments::spawn(
             c,
             &mut meshes,
             &fills,
             TOP_SLOT,
-            0,
-            1,
+            i,
+            slots,
             &title,
             &detail,
             AppState::Lobby,
             UiAction::ToggleMode,
         );
     }
+    segments::spawn(
+        c,
+        &mut meshes,
+        &fills,
+        TOP_SLOT,
+        slots - 1,
+        slots,
+        "Settings",
+        "G",
+        AppState::Lobby,
+        UiAction::Settings,
+    );
 }
 
 fn lobby_keys(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<LobbyInput>) {
