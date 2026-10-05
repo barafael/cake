@@ -41,6 +41,7 @@ use bevy::window::{CursorEntered, PrimaryWindow, WindowLevel};
 use crate::arctext::{Reserved, ReservedArcs};
 use crate::camera::{BackdropCamera, Cursor, OVERLAY_LAYER, Opening, backdrop_clear, px_per_unit};
 use crate::palette;
+use crate::render::Shapes;
 use crate::ringmesh::{self, Slots};
 use crate::settings::{self, DisplayMode, Settings};
 use crate::settings_window::{self, SettingsWindow};
@@ -332,6 +333,7 @@ fn press(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     fills: Res<SegmentFills>,
+    shapes: Res<Shapes>,
     mut win: Option<ResMut<SettingsWindow>>,
 ) {
     if !buttons.just_pressed(MouseButton::Left) || !opening.done() {
@@ -365,6 +367,7 @@ fn press(
                 &mut meshes,
                 &mut materials,
                 &fills,
+                &shapes,
                 &settings,
                 ChromeButton::Settings.centre(),
                 *state.get(),
