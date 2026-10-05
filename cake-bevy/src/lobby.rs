@@ -241,12 +241,15 @@ fn pump_lobby(
                     m.watching = watching;
                 }
             }
-            NetMsg::Start { players } => {
+            NetMsg::Start { players }
+                if !net.sequences() && Some(from) == net.host() =>
+            {
                 begin(&mut commands, &net, &mut next, players, false, Some(from));
             }
             // Stale match traffic, or messages only the host acts on.
             NetMsg::Roster(_)
             | NetMsg::Watch(_)
+            | NetMsg::Start { .. }
             | NetMsg::Cmd(_)
             | NetMsg::Turn { .. }
             | NetMsg::Hash { .. }
@@ -432,7 +435,8 @@ fn shuffle<T>(items: &mut [T], mut seed: u64) {
     }
 }
 
-/// Start the match on this peer.
+/// Start the match on this peer. A `Start` off the wire names the players, so
+/// the count is checked here, where every path funnels through.
 fn begin(
     commands: &mut Commands,
     net: &NetState,
@@ -441,6 +445,13 @@ fn begin(
     hosting: bool,
     host_peer: Option<PeerId>,
 ) {
+    if players.is_empty() || players.len() > MAX_SEATS {
+        warn!(
+            count = players.len(),
+            "refusing to start: a match seats 1 to {MAX_SEATS}"
+        );
+        return;
+    }
     info!(
         players = ?players.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
         hosting,

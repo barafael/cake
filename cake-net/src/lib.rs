@@ -42,6 +42,11 @@ pub const CH_RELIABLE: usize = 0;
 /// Guests send a checksum after every tick that is a multiple of this.
 pub const HASH_INTERVAL: u32 = 20;
 
+/// Turns this far past the next one to apply are accepted; anything further
+/// ahead is refused. A peer half a minute ahead is not lagging, it is wrong:
+/// without a bound, one bad tick parks the match in the future for good.
+const TURN_HORIZON: u32 = 600;
+
 /// Somebody in the lobby.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Member {
@@ -163,9 +168,13 @@ pub struct TurnBuffer {
 }
 
 impl TurnBuffer {
-    /// Store a turn. Returns `false` for a turn already applied or held.
+    /// Store a turn. Returns `false` for a turn already applied, held, or
+    /// past the horizon.
     pub fn push(&mut self, tick: u32, cmds: Vec<(Seat, Command)>) -> bool {
-        if tick < self.next || self.pending.contains_key(&tick) {
+        if tick < self.next
+            || tick >= self.next.saturating_add(TURN_HORIZON)
+            || self.pending.contains_key(&tick)
+        {
             return false;
         }
         self.pending.insert(tick, cmds);
@@ -420,6 +429,14 @@ mod tests {
         );
         buf.pop();
         assert!(!buf.push(0, vec![]), "applied already");
+    }
+
+    #[test]
+    fn turns_past_the_horizon_are_refused() {
+        let mut buf = TurnBuffer::default();
+        assert!(buf.push(0, vec![]));
+        assert!(!buf.push(TURN_HORIZON, vec![]), "just past the horizon");
+        assert!(buf.push(TURN_HORIZON - 1, vec![]), "just inside it");
     }
 
     #[test]

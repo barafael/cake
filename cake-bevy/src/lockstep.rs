@@ -86,7 +86,9 @@ fn pump(
                 }
             }
             NetMsg::Turn { tick, cmds } if !m.is_host() && Some(from) == m.host_peer => {
-                m.turns.push(tick, cmds);
+                if !m.turns.push(tick, cmds) {
+                    warn!(tick, "refused the host's turn: stale, duplicate, or past the horizon");
+                }
             }
             NetMsg::Hash { tick, hash } if m.is_host() => {
                 let verdict = m.host.as_ref().and_then(|h| h.hashes.check(tick, hash));
@@ -112,8 +114,9 @@ fn pump(
                 net.names.push((from, name));
             }
             // The host dealt a rematch while I was still looking at this one:
-            // go back through the lobby, which starts it.
-            NetMsg::Start { players } => {
+            // go back through the lobby, which starts it. Only the peer whose
+            // turns I follow may deal one.
+            NetMsg::Start { players } if Some(from) == m.host_peer => {
                 pending.0 = Some((players, from));
                 next.set(AppState::Lobby);
             }
