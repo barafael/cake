@@ -32,6 +32,11 @@ time). For local testing run `matchbox_server` and build with
 The web build is `trunk serve` (or `trunk build`); the room travels in the
 URL as `#room=name`.
 
+`CAKE_SETTINGS=1` opens the settings dial (the gear in the frame, or `G`)
+as the app starts, which is handy for screenshots. Settings persist in
+`~/.config/cake/settings`: `mode`, `effects` and `sky`, each also
+overridable for one run as `CAKE_MODE`, `CAKE_EFFECTS` and `CAKE_SKY`.
+
 `CAKE_SHOT=out.png` (with `CAKE_SHOT_AT=seconds`) saves one screenshot of
 the window, alpha included, which is handy for checking the circle's
 transparency.

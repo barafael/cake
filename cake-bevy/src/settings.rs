@@ -55,9 +55,37 @@ impl DisplayMode {
     }
 }
 
-#[derive(Resource, Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Resource, Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
     pub mode: DisplayMode,
+    /// Shots, sparks, smoke, wakes and stains. Calm machines can do without.
+    pub effects: bool,
+    /// The procedural nebula behind the map. It costs a small re-render
+    /// ten times a second, which the web feels.
+    pub sky: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            mode: DisplayMode::default(),
+            effects: true,
+            sky: true,
+        }
+    }
+}
+
+/// `on`/`off`, and friends.
+fn parse_bool(s: &str) -> Option<bool> {
+    match s.trim() {
+        "on" | "true" | "yes" | "1" => Some(true),
+        "off" | "false" | "no" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+fn bool_str(v: bool) -> &'static str {
+    if v { "on" } else { "off" }
 }
 
 impl Settings {
@@ -78,6 +106,15 @@ impl Settings {
         {
             settings.mode = mode;
         }
+        for (key, field) in [("CAKE_EFFECTS", 0usize), ("CAKE_SKY", 1)] {
+            if let Some(v) = std::env::var(key).ok().and_then(|v| parse_bool(&v)) {
+                if field == 0 {
+                    settings.effects = v;
+                } else {
+                    settings.sky = v;
+                }
+            }
+        }
         settings
     }
 
@@ -93,12 +130,30 @@ impl Settings {
             {
                 settings.mode = mode;
             }
+            match key.trim() {
+                "effects" => {
+                    if let Some(v) = parse_bool(value) {
+                        settings.effects = v;
+                    }
+                }
+                "sky" => {
+                    if let Some(v) = parse_bool(value) {
+                        settings.sky = v;
+                    }
+                }
+                _ => {}
+            }
         }
         settings
     }
 
     fn render(&self) -> String {
-        format!("mode = {}\n", self.mode.as_str())
+        format!(
+            "mode = {}\neffects = {}\nsky = {}\n",
+            self.mode.as_str(),
+            bool_str(self.effects),
+            bool_str(self.sky)
+        )
     }
 
     /// Write the settings back. Failing to save is not worth stopping for.
@@ -177,8 +232,16 @@ mod tests {
     #[test]
     fn settings_round_trip_through_their_text() {
         for mode in [DisplayMode::Cake, DisplayMode::Window] {
-            let s = Settings { mode };
-            assert_eq!(Settings::parse(&s.render()), s);
+            for effects in [true, false] {
+                for sky in [true, false] {
+                    let s = Settings {
+                        mode,
+                        effects,
+                        sky,
+                    };
+                    assert_eq!(Settings::parse(&s.render()), s);
+                }
+            }
         }
     }
 

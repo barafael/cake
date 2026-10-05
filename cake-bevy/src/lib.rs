@@ -32,6 +32,7 @@ pub mod render;
 pub mod ringmesh;
 pub mod segments;
 pub mod settings;
+pub mod settings_window;
 pub mod web;
 
 /// Seconds per simulation tick.
@@ -263,6 +264,7 @@ pub fn view_plugin(app: &mut App) {
         menu::plugin,
         nebula::plugin,
         segments::plugin,
+        settings_window::plugin,
         render::plugin,
         fx::plugin,
         input::plugin,

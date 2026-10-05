@@ -24,6 +24,7 @@ use crate::menu::{MENU_INNER, MENU_OUTER};
 use crate::ringmesh::Slots;
 use crate::segments::{self, Segment, SegmentFills, SegmentLabel, SegmentPressed};
 use crate::settings::{self, Settings};
+use crate::settings_window::SettingsWindow;
 use crate::{AppState, Match, palette};
 
 pub fn plugin(app: &mut App) {
@@ -78,6 +79,9 @@ struct LobbyRoster;
 
 #[derive(Component)]
 struct LobbyStatus;
+
+#[derive(Component)]
+struct LobbyKeys;
 
 #[derive(Component)]
 struct EconomyText;
@@ -274,7 +278,8 @@ fn spawn_lobby(
         keys,
         13.0,
         palette::DIM_TEXT,
-    );
+    )
+    .insert(LobbyKeys);
 
     let row = [
         ("Add bot", "B", LobbyAction::AddBot),
@@ -358,12 +363,22 @@ fn update_lobby(
     room: Option<Res<RoomId>>,
     lobby: Res<Lobby>,
     socket: Option<Res<MatchboxSocket>>,
+    win: Option<Res<SettingsWindow>>,
     mut texts: ParamSet<(
         Single<&mut Text, With<LobbyInfo>>,
         Single<&mut Text, With<LobbyStatus>>,
         Single<&mut Text, With<LobbyRoster>>,
+        Single<&mut Text, With<LobbyKeys>>,
     )>,
 ) {
+    // While the settings dial is open, the dial speaks.
+    if win.is_some() {
+        texts.p0().set_if_neq(Text(String::new()));
+        texts.p1().set_if_neq(Text(String::new()));
+        texts.p2().set_if_neq(Text(String::new()));
+        texts.p3().set_if_neq(Text(String::new()));
+        return;
+    }
     let room = room.map_or_else(|| "...".to_string(), |r| r.0.clone());
     let connection = match (socket.is_some(), net.my_id.is_some()) {
         (false, _) => "offline",
@@ -548,6 +563,7 @@ fn update_game(
     sel: Res<Selection>,
     mode: Res<Mode>,
     caption: Option<Res<Caption>>,
+    win: Option<Res<SettingsWindow>>,
     back: Query<(), With<UiAction>>,
     mut texts: ParamSet<(
         Single<&mut Text, With<EconomyText>>,
@@ -558,11 +574,13 @@ fn update_game(
     )>,
 ) {
     let sim = &m.sim;
-    // Once it is decided, the middle belongs to the recap.
+    // Once it is decided, the middle belongs to the recap. While the
+    // settings dial is open, it belongs to the dial.
     let recap = sim.outcome.is_some();
+    let covered = win.is_some();
     let mine = m.me.and_then(|me| sim.player(me).map(|p| (me, p)));
     let (economy, queue) = match mine {
-        _ if recap => (String::new(), String::new()),
+        _ if covered => (String::new(), String::new()),
         Some((me, p)) if p.alive => {
             let income = sim.income(me) * TICK_HZ as i64;
             (
@@ -586,14 +604,14 @@ fn update_game(
     };
     texts.p0().set_if_neq(Text(economy));
     texts.p1().set_if_neq(Text(queue));
-    let selection = if recap {
+    let selection = if covered {
         String::new()
     } else {
         selection_line(&m, &sel)
     };
     texts.p2().set_if_neq(Text(selection));
 
-    let hint = if recap || caption.is_some() {
+    let hint = if covered || caption.is_some() {
         String::new()
     } else if *mode != Mode::Normal {
         format!("{}   [Esc] cancel", mode.hint())

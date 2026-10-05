@@ -22,6 +22,8 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::sprite_render::{ColorMaterial, MeshMaterial2d};
 use cake_net::RoomId;
 
+use crate::settings::Settings;
+
 use crate::camera::{BACKDROP_LAYER, CAKE_LAYER};
 use crate::chrome::RADIUS;
 use crate::palette;
@@ -40,8 +42,13 @@ const TINT: Color = Color::srgba(0.5, 0.4, 0.8, 0.14);
 const DEPTH: u32 = 5;
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Startup, spawn).add_systems(Update, waver);
+    app.add_systems(Startup, spawn)
+        .add_systems(Update, (follow_sky_setting, waver));
 }
+
+/// Marks the nebula sprite, so the sky setting can hide it.
+#[derive(Component)]
+struct NebulaSprite;
 
 #[derive(Resource)]
 struct Nebula {
@@ -88,6 +95,7 @@ fn spawn(
         },
         Transform::from_xyz(0.0, 0.0, -10.0),
         RenderLayers::layer(CAKE_LAYER),
+        NebulaSprite,
     ));
     commands.insert_resource(Nebula {
         programs,
@@ -96,9 +104,35 @@ fn spawn(
     });
 }
 
+/// The sky setting hides the nebula (and stops paying for its re-render).
+fn follow_sky_setting(
+    settings: Res<Settings>,
+    mut sprites: Query<&mut Visibility, With<NebulaSprite>>,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+    let want = if settings.sky {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for mut visible in &mut sprites {
+        visible.set_if_neq(want);
+    }
+}
+
 /// Re-render the texture as `t` moves. The image is rewritten in place on
 /// the GPU, so the sprite follows it.
-fn waver(time: Res<Time>, mut nebula: ResMut<Nebula>, mut images: ResMut<Assets<Image>>) {
+fn waver(
+    settings: Res<Settings>,
+    time: Res<Time>,
+    mut nebula: ResMut<Nebula>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if !settings.sky {
+        return;
+    }
     let now = time.elapsed_secs();
     if now - nebula.rendered_at < RENDER_INTERVAL_SECS {
         return;

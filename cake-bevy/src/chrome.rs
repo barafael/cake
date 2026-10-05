@@ -43,6 +43,9 @@ use crate::camera::{BackdropCamera, Cursor, OVERLAY_LAYER, Opening, backdrop_cle
 use crate::palette;
 use crate::ringmesh::{self, Slots};
 use crate::settings::{self, DisplayMode, Settings};
+use crate::settings_window::{self, SettingsWindow};
+use crate::segments::SegmentFills;
+use crate::AppState;
 
 /// The whole circle, in circle units.
 pub const RADIUS: f32 = 600.0;
@@ -52,7 +55,8 @@ pub const PLAY_RADIUS: f32 = 512.0;
 /// The outermost band of the frame resizes instead of moving.
 const RESIZE_BAND: f32 = 14.0;
 /// The window buttons: sections of the whole ring across the top, left to
-/// right, edge to edge.
+/// right, edge to edge. The gear opens the settings dial; the rest manage
+/// the window itself.
 const BUTTONS: Slots = Slots {
     inner: PLAY_RADIUS,
     outer: RADIUS,
@@ -101,6 +105,7 @@ struct Segment(ChromeButton);
 /// The window buttons, left to right.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChromeButton {
+    Settings,
     Style,
     Pin,
     Minimize,
@@ -109,7 +114,8 @@ pub enum ChromeButton {
 }
 
 impl ChromeButton {
-    const ALL: [ChromeButton; 5] = [
+    const ALL: [ChromeButton; 6] = [
+        ChromeButton::Settings,
         ChromeButton::Style,
         ChromeButton::Pin,
         ChromeButton::Minimize,
@@ -117,7 +123,7 @@ impl ChromeButton {
         ChromeButton::Close,
     ];
 
-    fn centre(self) -> Vec2 {
+    pub fn centre(self) -> Vec2 {
         BUTTONS.centre_of(self as usize, Self::ALL.len())
     }
 
@@ -321,6 +327,12 @@ fn press(
     mut flags: ResMut<WindowFlags>,
     mut settings: ResMut<Settings>,
     mut exit: MessageWriter<AppExit>,
+    mut commands: Commands,
+    state: Res<State<AppState>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    fills: Res<SegmentFills>,
+    mut win: Option<ResMut<SettingsWindow>>,
 ) {
     if !buttons.just_pressed(MouseButton::Left) || !opening.done() {
         return;
@@ -346,6 +358,18 @@ fn press(
                 flags.pinned = !flags.pinned;
                 pin(&mut window, flags.pinned);
             }
+        }
+        Some(ChromeButton::Settings) => {
+            settings_window::toggle(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                &fills,
+                &settings,
+                ChromeButton::Settings.centre(),
+                *state.get(),
+                win.as_deref_mut(),
+            );
         }
         Some(ChromeButton::Style) => settings.mode = settings.mode.toggled(),
         None => {
@@ -443,10 +467,12 @@ fn kwin_keep_above(on: bool) {
 #[cfg(target_family = "wasm")]
 fn kwin_keep_above(_on: bool) {}
 
-/// Section fills: only under the pointer, and the pin while it is on.
+/// Section fills: only under the pointer, and the pin and the gear while
+/// they are on.
 fn shade(
     cursor: Res<Cursor>,
     flags: Res<WindowFlags>,
+    win: Option<Res<SettingsWindow>>,
     segments: Query<(&Segment, &MeshMaterial2d<ColorMaterial>)>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -457,6 +483,7 @@ fn shade(
             (true, ChromeButton::Close) => palette::CLOSE_HOVER,
             (true, _) => palette::CONTROL_HOVER,
             (false, ChromeButton::Pin) if flags.pinned => palette::CONTROL_LIT,
+            (false, ChromeButton::Settings) if win.is_some() => palette::CONTROL_LIT,
             (false, _) => Color::NONE,
         };
         palette::tint(&mut materials, &material.0, fill);
@@ -466,8 +493,10 @@ fn shade(
 fn draw(
     mut gizmos: Gizmos<ChromeGizmos>,
     mut lines: Gizmos<ChromeLines>,
+    time: Res<Time>,
     cursor: Res<Cursor>,
     flags: Res<WindowFlags>,
+    win: Option<Res<SettingsWindow>>,
 ) {
     // The sections' edges, across the ring.
     let n = ChromeButton::ALL.len();
@@ -507,6 +536,22 @@ fn draw(
         };
         let s = SYMBOL;
         match b {
+            ChromeButton::Settings => {
+                // A gear: a ring with eight teeth and a hub. While the dial
+                // is open, it idles round.
+                let spin = if win.is_some() { time.elapsed_secs() } else { 0.0 };
+                for k in 0..8 {
+                    let dir = Vec2::from_angle(spin + k as f32 * std::f32::consts::TAU / 8.0);
+                    gizmos.line_2d(
+                        at(dir.x * s * 0.65, dir.y * s * 0.65),
+                        at(dir.x * s * 1.05, dir.y * s * 1.05),
+                        color,
+                    );
+                }
+                gizmos
+                    .circle_2d(Isometry2d::from_translation(at(0.0, 0.0)), 0.72 * s, color)
+                    .resolution(16);
+            }
             ChromeButton::Close => {
                 gizmos.line_2d(at(-s, -s), at(s, s), color);
                 gizmos.line_2d(at(-s, s), at(s, -s), color);

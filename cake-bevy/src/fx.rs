@@ -15,6 +15,7 @@ use cake_core::stats::{Kind, Shot};
 use cake_core::{EntityId, Event, Pos};
 
 use crate::render::{self, Shapes, to_vec2};
+use crate::settings::Settings;
 use crate::{AppState, Match, TICK_SECS, palette};
 
 /// Wide, faint lines under the bright ones: the glow.
@@ -447,7 +448,13 @@ fn flight(m: &Match, p: &Projectile) -> (Vec2, Vec2) {
     (at, dir)
 }
 
-pub fn collect(time: Res<Time>, mut fx: ResMut<Fx>, mut m: ResMut<Match>, shapes: Res<Shapes>) {
+pub fn collect(
+    time: Res<Time>,
+    settings: Res<Settings>,
+    mut fx: ResMut<Fx>,
+    mut m: ResMut<Match>,
+    shapes: Res<Shapes>,
+) {
     let dt = time.delta_secs();
     let fx = &mut *fx;
 
@@ -484,7 +491,12 @@ pub fn collect(time: Res<Time>, mut fx: ResMut<Fx>, mut m: ResMut<Match>, shapes
 
     fx.sight = Sight::of(&m);
     let me = m.me;
-    for event in std::mem::take(&mut m.events) {
+    // With calm effects the events are read and dropped: the hurt flash on
+    // the health rings stays, the theatre does not.
+    let events = std::mem::take(&mut m.events);
+    let theatre = settings.effects;
+    if theatre {
+        for event in events {
         match event {
             Event::Shot {
                 from,
@@ -523,6 +535,7 @@ pub fn collect(time: Res<Time>, mut fx: ResMut<Fx>, mut m: ResMut<Match>, shapes
             }
             _ => {}
         }
+        }
     }
 
     // Whatever lost health since last frame flashes, and moving units lay
@@ -540,7 +553,7 @@ pub fn collect(time: Res<Time>, mut fx: ResMut<Fx>, mut m: ResMut<Match>, shapes
             }
         }
         health.push((e.id, e.hp));
-        if e.kind.is_mobile() && e.hp > 0 && m.sees(e) {
+        if settings.effects && e.kind.is_mobile() && e.hp > 0 && m.sees(e) {
             lay_wake(&mut fx.wakes, e.id, m.draw_pos(e));
         }
     }
@@ -548,6 +561,9 @@ pub fn collect(time: Res<Time>, mut fx: ResMut<Fx>, mut m: ResMut<Match>, shapes
     fx.wakes.retain(|w| m.sim.get(w.id).is_some());
 
     // Missiles leave smoke, plasma sheds sparks.
+    if !theatre {
+        return;
+    }
     fx.trail_clock = (fx.trail_clock + dt).min(3.0 / TRAIL_HZ);
     while fx.trail_clock >= 1.0 / TRAIL_HZ {
         fx.trail_clock -= 1.0 / TRAIL_HZ;
@@ -632,7 +648,10 @@ fn lay_wake(wakes: &mut Vec<Wake>, id: EntityId, at: Vec2) {
 
 /// Wakes drawn under the shapes: a fading line through the unit's recent
 /// positions, in its own colour.
-fn wakes(fx: Res<Fx>, m: Res<Match>, mut gizmos: Gizmos) {
+fn wakes(settings: Res<Settings>, fx: Res<Fx>, m: Res<Match>, mut gizmos: Gizmos) {
+    if !settings.effects {
+        return;
+    }
     for w in &fx.wakes {
         let Some(e) = m.sim.get(w.id) else {
             continue;
