@@ -58,8 +58,16 @@ impl DisplayMode {
 #[derive(Resource, Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
     pub mode: DisplayMode,
-    /// Shots, sparks, smoke, wakes and stains. Calm machines can do without.
-    pub effects: bool,
+    /// Shots, flashes, blasts and death bursts - the battle's theatre.
+    pub sparks: bool,
+    /// Missile trails, plasma embers, and burning buildings.
+    pub smoke: bool,
+    /// The wake a moving unit lays behind it.
+    pub trails: bool,
+    /// The scorched stain where a building fell.
+    pub stains: bool,
+    /// The ring's slow circulation, carrying smoke along it.
+    pub wind: bool,
     /// The procedural nebula behind the map. It costs a small re-render
     /// ten times a second, which the web feels.
     pub sky: bool,
@@ -69,7 +77,11 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             mode: DisplayMode::default(),
-            effects: true,
+            sparks: true,
+            smoke: true,
+            trails: true,
+            stains: true,
+            wind: true,
             sky: true,
         }
     }
@@ -100,19 +112,16 @@ impl Settings {
         if let Some(text) = path().and_then(|p| std::fs::read_to_string(p).ok()) {
             settings = Settings::parse(&text);
         }
-        if let Some(mode) = std::env::var("CAKE_MODE")
-            .ok()
-            .and_then(|v| DisplayMode::parse(&v))
-        {
-            settings.mode = mode;
-        }
-        for (key, field) in [("CAKE_EFFECTS", 0usize), ("CAKE_SKY", 1)] {
+        for (key, which) in [
+            ("CAKE_SPARKS", Field::Sparks),
+            ("CAKE_SMOKE", Field::Smoke),
+            ("CAKE_TRAILS", Field::Trails),
+            ("CAKE_STAINS", Field::Stains),
+            ("CAKE_WIND", Field::Wind),
+            ("CAKE_SKY", Field::Sky),
+        ] {
             if let Some(v) = std::env::var(key).ok().and_then(|v| parse_bool(&v)) {
-                if field == 0 {
-                    settings.effects = v;
-                } else {
-                    settings.sky = v;
-                }
+                settings.set(which, v);
             }
         }
         settings
@@ -130,18 +139,17 @@ impl Settings {
             {
                 settings.mode = mode;
             }
-            match key.trim() {
-                "effects" => {
-                    if let Some(v) = parse_bool(value) {
-                        settings.effects = v;
-                    }
-                }
-                "sky" => {
-                    if let Some(v) = parse_bool(value) {
-                        settings.sky = v;
-                    }
-                }
-                _ => {}
+            let which = match key.trim() {
+                "sparks" => Some(Field::Sparks),
+                "smoke" => Some(Field::Smoke),
+                "trails" => Some(Field::Trails),
+                "stains" => Some(Field::Stains),
+                "wind" => Some(Field::Wind),
+                "sky" => Some(Field::Sky),
+                _ => None,
+            };
+            if let (Some(which), Some(v)) = (which, parse_bool(value)) {
+                settings.set(which, v);
             }
         }
         settings
@@ -149,13 +157,39 @@ impl Settings {
 
     fn render(&self) -> String {
         format!(
-            "mode = {}\neffects = {}\nsky = {}\n",
+            "mode = {}\nsparks = {}\nsmoke = {}\ntrails = {}\nstains = {}\nwind = {}\nsky = {}\n",
             self.mode.as_str(),
-            bool_str(self.effects),
+            bool_str(self.sparks),
+            bool_str(self.smoke),
+            bool_str(self.trails),
+            bool_str(self.stains),
+            bool_str(self.wind),
             bool_str(self.sky)
         )
     }
 
+    fn set(&mut self, which: Field, value: bool) {
+        match which {
+            Field::Sparks => self.sparks = value,
+            Field::Smoke => self.smoke = value,
+            Field::Trails => self.trails = value,
+            Field::Stains => self.stains = value,
+            Field::Wind => self.wind = value,
+            Field::Sky => self.sky = value,
+        }
+    }
+}
+
+enum Field {
+    Sparks,
+    Smoke,
+    Trails,
+    Stains,
+    Wind,
+    Sky,
+}
+
+impl Settings {
     /// Write the settings back. Failing to save is not worth stopping for.
     pub fn save(&self) {
         let Some(path) = path() else {
@@ -232,17 +266,25 @@ mod tests {
     #[test]
     fn settings_round_trip_through_their_text() {
         for mode in [DisplayMode::Cake, DisplayMode::Window] {
-            for effects in [true, false] {
-                for sky in [true, false] {
-                    let s = Settings {
-                        mode,
-                        effects,
-                        sky,
-                    };
-                    assert_eq!(Settings::parse(&s.render()), s);
-                }
+            for sparks in [true, false] {
+                let s = Settings {
+                    mode,
+                    sparks,
+                    ..Settings::parse("smoke = on\ntrails = off\nstains = on\nwind = on\nsky = off")
+                };
+                assert_eq!(Settings::parse(&s.render()), s);
             }
         }
+    }
+
+    #[test]
+    fn every_effect_is_read_from_the_file() {
+        let s = Settings::parse(
+            "sparks = off\nsmoke = off\ntrails = off\nstains = off\nwind = off\nsky = off",
+        );
+        assert!(!s.sparks && !s.smoke && !s.trails && !s.stains && !s.wind && !s.sky);
+        let s = Settings::parse("bogus = on");
+        assert!(s.sparks && s.smoke && s.trails && s.stains && s.wind && s.sky);
     }
 
     #[test]

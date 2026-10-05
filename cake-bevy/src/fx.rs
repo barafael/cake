@@ -244,6 +244,18 @@ impl Fx {
         }
     }
 
+    /// The ring keeps a scorched stain where a building stood, fading long
+    /// after the embers are out.
+    fn stain(&mut self, at: Vec2, size: f32, color: Color) {
+        self.marks.push(Mark {
+            at,
+            age: -0.3,
+            ttl: STAIN_SECS,
+            color,
+            look: Look::Stain { size },
+        });
+    }
+
     /// Something died: its outline breaks apart, and buildings burn.
     fn died(&mut self, shapes: &Shapes, at: Vec2, kind: Kind, color: Color) {
         let radius = (kind.stats().radius / UNIT) as f32;
@@ -279,17 +291,6 @@ impl Fx {
             FLAME,
         );
         if structure {
-            // The ring keeps a scorched stain where it stood, fading long
-            // after the embers are out.
-            self.marks.push(Mark {
-                at,
-                age: -0.3,
-                ttl: STAIN_SECS,
-                color,
-                look: Look::Stain {
-                    size: radius * 1.15,
-                },
-            });
             self.embers(at, 18, (20.0, 70.0), FLAME);
             self.smoke(at, 8, (radius * 0.4, radius * 1.4), 12.0, (1.2, 2.2));
             self.marks.push(Mark {
@@ -471,8 +472,8 @@ pub fn collect(
         // The ring's slow circulation, carrying smoke and embers the way
         // everything on it moves.
         let wind = match p.mote {
-            Mote::Smoke { .. } => RING_WIND,
-            Mote::Ember { .. } => RING_WIND * 0.5,
+            Mote::Smoke { .. } if settings.wind => RING_WIND,
+            Mote::Ember { .. } if settings.wind => RING_WIND * 0.5,
             _ => 0.0,
         };
         if wind != 0.0 {
@@ -494,8 +495,7 @@ pub fn collect(
     // With calm effects the events are read and dropped: the hurt flash on
     // the health rings stays, the theatre does not.
     let events = std::mem::take(&mut m.events);
-    let theatre = settings.effects;
-    if theatre {
+    if true {
         for event in events {
         match event {
             Event::Shot {
@@ -503,7 +503,7 @@ pub fn collect(
                 to,
                 owner,
                 kind,
-            } if fx.sight.sees(from) || fx.sight.sees(to) => {
+            } if settings.sparks && (fx.sight.sees(from) || fx.sight.sees(to)) => {
                 fx.shot(
                     to_vec2(from),
                     to_vec2(to),
@@ -513,18 +513,25 @@ pub fn collect(
             }
             Event::Impact {
                 at, owner, kind, ..
-            } if fx.sight.sees(at) => {
+            } if settings.sparks && fx.sight.sees(at) => {
                 fx.impact(to_vec2(at), kind, palette::seat(owner as usize));
             }
             // My own losses show even where nothing of mine still sees.
             Event::Died { owner, kind, pos } if fx.sight.sees(pos) || me == Some(owner) => {
-                fx.died(&shapes, to_vec2(pos), kind, palette::seat(owner as usize));
+                let colour = palette::seat(owner as usize);
+                let at = to_vec2(pos);
+                if kind.is_structure() && settings.stains {
+                    fx.stain(at, (kind.stats().radius / UNIT) as f32 * 1.15, colour);
+                }
+                if settings.sparks {
+                    fx.died(&shapes, at, kind, colour);
+                }
             }
-            Event::Blast { at, owner, radius } if fx.sight.sees(at) || me == Some(owner) => {
+            Event::Blast { at, owner, radius } if settings.sparks && (fx.sight.sees(at) || me == Some(owner)) => {
                 let r = (radius / UNIT) as f32;
                 fx.blast(to_vec2(at), r, palette::seat(owner as usize));
             }
-            Event::Completed { owner, kind, pos } if fx.sight.sees(pos) => {
+            Event::Completed { owner, kind, pos } if settings.sparks && fx.sight.sees(pos) => {
                 let size = (kind.stats().radius / UNIT) as f32 + 4.0;
                 fx.mark(
                     to_vec2(pos),
@@ -553,15 +560,15 @@ pub fn collect(
             }
         }
         health.push((e.id, e.hp));
-        if settings.effects && e.kind.is_mobile() && e.hp > 0 && m.sees(e) {
+        if settings.trails && e.kind.is_mobile() && e.hp > 0 && m.sees(e) {
             lay_wake(&mut fx.wakes, e.id, m.draw_pos(e));
         }
     }
     fx.health = health;
     fx.wakes.retain(|w| m.sim.get(w.id).is_some());
 
-    // Missiles leave smoke, plasma sheds sparks.
-    if !theatre {
+    // Missiles leave smoke, plasma sheds sparks, wounded buildings smoulder.
+    if !settings.smoke {
         return;
     }
     fx.trail_clock = (fx.trail_clock + dt).min(3.0 / TRAIL_HZ);
@@ -649,7 +656,7 @@ fn lay_wake(wakes: &mut Vec<Wake>, id: EntityId, at: Vec2) {
 /// Wakes drawn under the shapes: a fading line through the unit's recent
 /// positions, in its own colour.
 fn wakes(settings: Res<Settings>, fx: Res<Fx>, m: Res<Match>, mut gizmos: Gizmos) {
-    if !settings.effects {
+    if !settings.trails {
         return;
     }
     for w in &fx.wakes {

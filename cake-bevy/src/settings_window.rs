@@ -1,16 +1,17 @@
 //! The settings dial: a round sub-window that unfolds out of the gear in
 //! the frame.
 //!
-//! One ring per setting, labelled along its arc in the design language of
-//! every other control. The state is a checkmark sitting in the gap at
-//! each ring's foot - a ring is a click target, not a light. The middle
-//! shows what the Effects setting buys: two small panes rendering the same
-//! little scene, the left with the theatre, the right without - actual
-//! meshes, the same shapes and colours as the game's. The dial grows out
-//! of the gear that opened it, dims the game behind it (which stays
-//! visible through the disc), and folds back when dismissed. It claims
-//! the whole pointer while open; the gear, G, or a click on the dark puts
-//! it away. It also shows the frame rate, since its own settings move it.
+//! Every effect has its own segment, laid out as two arcs of buttons the
+//! way every other control in the game is: Sparks, Smoke, Trails, Stains,
+//! Wind and Sky, lit when on, each saying on or off along its arc, Mode
+//! sitting at the bottom. The middle belongs to the frame rate and to two
+//! wide panes rendering the same little scene - a plasma turret picking on
+//! a brawler - the left under the settings as they now stand, the right
+//! with everything off. The scene is drawn with the game's own shapes, as
+//! meshes. The dial grows out of the gear that opened it, dims the game
+//! behind it (which stays visible through the disc), claims the whole
+//! pointer while open, and folds back when dismissed - by the gear, G, or
+//! a click on the dark.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
@@ -19,7 +20,7 @@ use bevy::render::render_resource::PrimitiveTopology;
 use bevy::sprite_render::{ColorMaterial, MeshMaterial2d};
 use cake_core::Kind;
 
-use crate::arctext::{ArcText, Frame};
+use crate::arctext::ArcText;
 use crate::camera::{Cursor, OVERLAY_LAYER};
 use crate::chrome::{self, ChromeButton, PointerClaimed, PointerSet};
 use crate::render::Shapes;
@@ -44,21 +45,26 @@ const DIAL_Z: f32 = 6.5;
 
 const PANEL_COLOUR: Color = Color::srgba(0.10, 0.105, 0.13, 0.82);
 
-/// The two preview panes, in the dial's hole. Their radius, centres, and
-/// the little scene inside: a plasma turret picks on a brawler.
-const LENS: f32 = 40.0;
-const LENS_ON: Vec2 = Vec2::new(-46.0, -16.0);
-const LENS_OFF: Vec2 = Vec2::new(46.0, -16.0);
+/// The two preview panes, under the effect segments. Their radius,
+/// centres, and the little scene inside: a plasma turret picking on a
+/// brawler.
+const LENS: f32 = 62.0;
+const LENS_ON: Vec2 = Vec2::new(-72.0, -42.0);
+const LENS_OFF: Vec2 = Vec2::new(72.0, -42.0);
 /// Seconds for one round of the preview scene.
 const SCENE_PERIOD: f32 = 1.5;
 
 const FLAME: Color = Color::srgb(1.0, 0.72, 0.35);
 const SMOKE: Color = Color::srgb(0.62, 0.64, 0.70);
 
-/// One ring of the dial, and what it toggles.
+/// One segment of the dial, and what it toggles.
 #[derive(Component, Clone, Copy, PartialEq)]
 pub enum SettingRow {
-    Effects,
+    Sparks,
+    Smoke,
+    Trails,
+    Stains,
+    Wind,
     Sky,
     Mode,
 }
@@ -67,14 +73,12 @@ impl SettingRow {
     /// Its title, and its state as words.
     fn describe(&self, settings: &Settings) -> (String, String) {
         match self {
-            SettingRow::Effects => (
-                "Effects".into(),
-                bool_word(settings.effects).into(),
-            ),
-            SettingRow::Sky => (
-                "Sky".into(),
-                format!("nebula {}", bool_word(settings.sky)),
-            ),
+            SettingRow::Sparks => ("Sparks".into(), bool_word(settings.sparks).into()),
+            SettingRow::Smoke => ("Smoke".into(), bool_word(settings.smoke).into()),
+            SettingRow::Trails => ("Trails".into(), bool_word(settings.trails).into()),
+            SettingRow::Stains => ("Stains".into(), bool_word(settings.stains).into()),
+            SettingRow::Wind => ("Wind".into(), bool_word(settings.wind).into()),
+            SettingRow::Sky => ("Sky".into(), bool_word(settings.sky).into()),
             SettingRow::Mode => ("Mode".into(), settings.mode.name().into()),
         }
     }
@@ -82,9 +86,25 @@ impl SettingRow {
     /// Whether the setting is on (a mode has no on).
     fn is_on(&self, settings: &Settings) -> bool {
         match self {
-            SettingRow::Effects => settings.effects,
+            SettingRow::Sparks => settings.sparks,
+            SettingRow::Smoke => settings.smoke,
+            SettingRow::Trails => settings.trails,
+            SettingRow::Stains => settings.stains,
+            SettingRow::Wind => settings.wind,
             SettingRow::Sky => settings.sky,
             SettingRow::Mode => false,
+        }
+    }
+
+    fn set(&self, settings: &mut Settings) {
+        match self {
+            SettingRow::Sparks => settings.sparks = !settings.sparks,
+            SettingRow::Smoke => settings.smoke = !settings.smoke,
+            SettingRow::Trails => settings.trails = !settings.trails,
+            SettingRow::Stains => settings.stains = !settings.stains,
+            SettingRow::Wind => settings.wind = !settings.wind,
+            SettingRow::Sky => settings.sky = !settings.sky,
+            SettingRow::Mode => settings.mode = settings.mode.toggled(),
         }
     }
 }
@@ -92,10 +112,6 @@ impl SettingRow {
 fn bool_word(on: bool) -> &'static str {
     if on { "on" } else { "off" }
 }
-
-/// The dial's checkmark, or its empty ring when the setting is off.
-#[derive(Component)]
-struct CheckOf(SettingRow);
 
 /// The dial, and where it is between folded and unfolded.
 #[derive(Resource)]
@@ -210,9 +226,8 @@ fn spawn(
         ChildOf(root),
     ));
 
-    // The dial: a disc with a rim, one ring per setting, a lens pair in the
-    // middle. All a step above the recap's chart, so the two can share the
-    // ring when a match is over.
+    // The dial: a disc with a rim. All a step above the recap's chart, so
+    // the two can share the ring when a match is over.
     commands.spawn((
         Mesh2d(meshes.add(Circle::new(PANEL).mesh().resolution(64))),
         MeshMaterial2d(materials.add(ColorMaterial::from_color(PANEL_COLOUR))),
@@ -228,29 +243,42 @@ fn spawn(
         ChildOf(root),
     ));
 
-    let ring = |inner, outer| Slots {
-        inner,
-        outer,
-        centre: 90.0,
-        width: 356.0,
-        gap: 8.0,
-        clockwise: true,
-    };
-    for (row, slots) in [
-        (SettingRow::Effects, ring(230.0, 290.0)),
-        (SettingRow::Sky, ring(160.0, 220.0)),
-        (SettingRow::Mode, ring(90.0, 150.0)),
-    ]
-    .into_iter()
-    {
+    // Two arcs of effect segments, and Mode at the bottom.
+    for (row, index) in [
+        (SettingRow::Sparks, 0usize),
+        (SettingRow::Smoke, 1),
+        (SettingRow::Trails, 2),
+        (SettingRow::Stains, 0),
+        (SettingRow::Wind, 1),
+        (SettingRow::Sky, 2),
+        (SettingRow::Mode, 0),
+    ] {
+        let count = if row == SettingRow::Mode { 1 } else { 3 };
+        let (inner, outer) = match row {
+            SettingRow::Stains | SettingRow::Wind | SettingRow::Sky => (165.0, 225.0),
+            SettingRow::Mode => (95.0, 155.0),
+            _ => (235.0, 295.0),
+        };
+        let (centre, width, gap, clockwise) = match row {
+            SettingRow::Mode => (270.0, 40.0, 0.0, false),
+            _ => (90.0, 58.0, 6.0, true),
+        };
+        let slots = Slots {
+            inner,
+            outer,
+            centre,
+            width,
+            gap,
+            clockwise,
+        };
         let (title, detail) = row.describe(settings);
         let e = segments::spawn(
             commands,
             meshes,
             fills,
             slots,
-            0,
-            1,
+            index,
+            count,
             &title,
             &detail,
             state,
@@ -258,50 +286,20 @@ fn spawn(
         );
         commands.entity(e).insert(Segment {
             row: slots,
-            index: 0,
-            count: 1,
+            index,
+            count,
             enabled: true,
-            lit: false,
+            lit: row.is_on(settings),
         });
         commands.entity(root).add_child(e);
     }
 
-    // Checkmarks in the rings' foot gaps: the state, where the band isn't.
-    // Mode cycles rather than toggles, so it has none.
-    for (row, mid) in [(SettingRow::Effects, 260.0), (SettingRow::Sky, 190.0)] {
-        let at = Vec2::new(0.0, -mid);
-        let check = commands
-            .spawn((
-                Transform::from_translation(at.extend(-1.0)),
-                visibility_off_unless(row.is_on(settings)),
-                CheckOf(row),
-                ChildOf(root),
-            ))
-            .id();
-        for (len, rot, off) in [(4.6f32, -std::f32::consts::FRAC_PI_4, Vec2::new(-2.6, -1.2)), (8.4, 0.62, Vec2::new(1.4, 0.4))] {
-            commands.spawn((
-                Mesh2d(meshes.add(Rectangle::new(len, 2.1).mesh())),
-                MeshMaterial2d(materials.add(ColorMaterial::from_color(palette::GOOD))),
-                Transform::from_translation(off.extend(-1.0)).with_rotation(Quat::from_rotation_z(rot)),
-                RenderLayers::layer(OVERLAY_LAYER),
-                ChildOf(check),
-            ));
-        }
-        commands.spawn((
-            Mesh2d(meshes.add(ringmesh::ring(4.2, 6.2, 10.0))),
-            MeshMaterial2d(materials.add(ColorMaterial::from_color(palette::DIM_TEXT.with_alpha(0.55)))),
-            Transform::from_translation(at.extend(-1.0)),
-            RenderLayers::layer(OVERLAY_LAYER),
-            visibility_off_unless(row.is_on(settings)),
-            ChildOf(root),
-        ));
-    }
-
-    // The two panes: what Effects buys. Same outlines as the game's, one
-    // scene playing in the left pane, the right one calm.
+    // The two panes: what the settings buy. Same outlines as the game's,
+    // the left scene playing under the settings as they stand, the right
+    // one with everything off.
     for centre in [LENS_ON, LENS_OFF] {
         commands.spawn((
-            Mesh2d(meshes.add(Circle::new(LENS).mesh().resolution(40))),
+            Mesh2d(meshes.add(Circle::new(LENS).mesh().resolution(48))),
             MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::srgba(
                 1.0, 1.0, 1.0, 0.04,
             )))),
@@ -324,8 +322,8 @@ fn spawn(
             palette::seat(1).with_alpha(0.35)
         };
         for (kind, at) in [
-            (Kind::PlasmaTurret, centre + Vec2::new(-16.0, -5.0)),
-            (Kind::Brawler, centre + Vec2::new(17.0, 3.0)),
+            (Kind::PlasmaTurret, centre + Vec2::new(-24.0, -8.0)),
+            (Kind::Brawler, centre + Vec2::new(26.0, 5.0)),
         ] {
             commands.spawn((
                 Mesh2d(meshes.add(outline_mesh(shapes.of(kind)))),
@@ -378,33 +376,22 @@ fn spawn(
         ));
     }
 
-    // The dial's name and its numbers, in the hole in the middle.
-    commands.spawn((
-        ArcText {
-            text: "SETTINGS".into(),
-            angle: std::f32::consts::FRAC_PI_2,
-            frame: Frame::Screen,
-            radius: 80.0,
-            size: 9.0,
-            color: palette::DIM_TEXT,
-        },
-        ChildOf(root),
-    ));
+    // The frame rate, since these settings move it, and the panes' names.
     commands.spawn((
         Text2d::new(""),
         TextFont {
-            font_size: bevy::text::FontSize::Px(13.0),
+            font_size: bevy::text::FontSize::Px(14.0),
             ..default()
         },
         TextColor(palette::TEXT),
-        Transform::from_xyz(0.0, 44.0, -3.0),
+        Transform::from_xyz(0.0, 118.0, -3.0),
         RenderLayers::layer(OVERLAY_LAYER),
         DialFps,
         ChildOf(root),
     ));
     for (at, word) in [
-        (LENS_ON + Vec2::new(0.0, -58.0), "effects"),
-        (LENS_OFF + Vec2::new(0.0, -58.0), "calm"),
+        (LENS_ON + Vec2::new(0.0, -78.0), "now"),
+        (LENS_OFF + Vec2::new(0.0, -78.0), "all off"),
     ] {
         commands.spawn((
             Text2d::new(word),
@@ -426,14 +413,6 @@ fn spawn(
         t: 0.0,
         closing: false,
     });
-}
-
-fn visibility_off_unless(on: bool) -> Visibility {
-    if on {
-        Visibility::Inherited
-    } else {
-        Visibility::Hidden
-    }
 }
 
 /// The game's own outlines, as a drawable mesh: each polyline folded into
@@ -564,13 +543,11 @@ fn click_outside(
     }
 }
 
-/// Keep the rings saying what the settings now say, and the checkmarks
-/// telling the truth.
+/// Keep the segments saying what the settings now say, and lit when on.
 fn sync_rows(
     settings: Res<Settings>,
     win: Option<Res<SettingsWindow>>,
-    mut rows: Query<(Entity, &SettingRow)>,
-    mut checks: Query<(&CheckOf, &mut Visibility), Without<Segment>>,
+    mut rows: Query<(Entity, &SettingRow, &mut Segment)>,
     mut labels: Query<(&SegmentLabel, &mut ArcText)>,
 ) {
     let Some(_) = win else {
@@ -579,17 +556,17 @@ fn sync_rows(
     if !settings.is_changed() {
         return;
     }
-    for (e, row) in &mut rows {
+    for (e, row, mut segment) in &mut rows {
         let (title, detail) = row.describe(&settings);
         segments::relabel(&mut labels, e, &title, &detail);
-    }
-    for (check, mut visible) in &mut checks {
-        let on = check.0.is_on(&settings);
-        visible.set_if_neq(visibility_off_unless(on));
+        let lit = row.is_on(&settings);
+        if segment.lit != lit {
+            segment.lit = lit;
+        }
     }
 }
 
-/// Clicking a ring turns its setting.
+/// Clicking a segment turns its setting.
 fn act(
     mut pressed: MessageReader<SegmentPressed>,
     rows: Query<&SettingRow>,
@@ -597,11 +574,7 @@ fn act(
 ) {
     for SegmentPressed(e) in pressed.read() {
         if let Ok(row) = rows.get(*e) {
-            match row {
-                SettingRow::Effects => settings.effects = !settings.effects,
-                SettingRow::Sky => settings.sky = !settings.sky,
-                SettingRow::Mode => settings.mode = settings.mode.toggled(),
-            }
+            row.set(&mut settings);
         }
     }
 }
@@ -644,37 +617,38 @@ fn fps_text(
     }
 }
 
-/// The little scene in the left pane: a plasma turret peppering a brawler.
-/// The right pane holds the same outlines, calm. Both are drawn with the
-/// game's own shapes and colours.
+/// The little scene in the left pane: a plasma turret peppering a brawler,
+/// under the settings as they now stand. The right pane holds the same
+/// outlines with everything off. Both are drawn with the game's own shapes
+/// and colours.
 fn preview(
     time: Res<Time>,
+    settings: Res<Settings>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut things: Query<(&PreviewRole, &mut Transform, &MeshMaterial2d<ColorMaterial>)>,
 ) {
-    let muzzle = LENS_ON + Vec2::new(-10.0, -3.0);
-    let target = LENS_ON + Vec2::new(16.0, 2.0);
+    let muzzle = LENS_ON + Vec2::new(-18.0, -4.0);
+    let target = LENS_ON + Vec2::new(24.0, 4.0);
     let now = time.elapsed_secs() % SCENE_PERIOD;
     let fly = 0.33;
     let settle = |after: f32, secs: f32| ((now - after) / secs).clamp(0.0, 1.0);
 
     for (role, mut tf, material) in &mut things {
-        let (at, scale, colour) = match *role {
+        let theatre = settings.sparks;
+        let (at, size, colour) = match *role {
             PreviewRole::Ball => {
                 let p = (now / fly).clamp(0.0, 1.0);
-                let r = 1.4 + 2.2 * p;
                 (
                     muzzle.lerp(target, p),
-                    Vec3::splat(r),
+                    1.4 + 2.2 * p,
                     palette::TEXT.with_alpha(0.9),
                 )
             }
             PreviewRole::Glow => {
                 let p = (now / fly).clamp(0.0, 1.0);
-                let r = 2.6 + 4.2 * p;
                 (
                     muzzle.lerp(target, p),
-                    Vec3::splat(r),
+                    2.6 + 4.2 * p,
                     palette::seat(1).with_alpha(0.3),
                 )
             }
@@ -682,7 +656,7 @@ fn preview(
                 let u = settle(fly, 0.3);
                 (
                     target,
-                    Vec3::splat(2.0 + 13.0 * u),
+                    2.0 + 20.0 * u,
                     palette::seat(1).with_alpha(0.4 * (1.0 - u)),
                 )
             }
@@ -690,7 +664,7 @@ fn preview(
                 let u = settle(fly, 0.14);
                 (
                     target,
-                    Vec3::splat(2.0 + 7.0 * u),
+                    2.0 + 10.0 * u,
                     FLAME.with_alpha(0.8 * (1.0 - u)),
                 )
             }
@@ -700,31 +674,40 @@ fn preview(
                     std::f32::consts::TAU * (k as f32 / 6.0) + 0.35 + (k as f32 * 1.7).sin() * 0.2,
                 );
                 (
-                    target + dir * (2.0 + 10.0 * u),
-                    Vec3::splat(1.4 + 4.5 * (1.0 - u)),
+                    target + dir * (3.0 + 14.0 * u),
+                    1.4 + 5.5 * (1.0 - u),
                     FLAME.with_alpha(0.8 * (1.0 - u)),
                 )
             }
             PreviewRole::Smoke(k) => {
                 let u = settle(fly + 0.05, 0.9);
-                let drift = Vec2::new(-4.0 - k as f32 * 2.5, 5.0 + k as f32 * 1.5);
+                let drift = Vec2::new(-6.0 - k as f32 * 4.0, 7.0 + k as f32 * 2.5);
                 (
                     target + drift * u,
-                    Vec3::splat(2.5 + 4.5 * u),
+                    2.5 + 6.5 * u,
                     SMOKE.with_alpha(0.22 * (1.0 - u)),
                 )
             }
             PreviewRole::Core => {
                 let charge = ((now - fly) / (SCENE_PERIOD - fly)).clamp(0.0, 1.0);
                 (
-                    LENS_ON + Vec2::new(-16.0, -5.0),
-                    Vec3::splat(1.6 + 1.6 * charge),
+                    LENS_ON + Vec2::new(-24.0, -8.0),
+                    1.8 + 2.2 * charge,
                     palette::seat(1).with_alpha(0.15 + 0.5 * charge),
                 )
             }
         };
-        tf.translation = at.extend(-1.5);
-        tf.scale = Vec3::splat(scale.x);
-        palette::tint(&mut materials, &material.0, colour);
+        let on = match *role {
+            PreviewRole::Smoke(_) => settings.smoke,
+            _ => theatre,
+        };
+        if on {
+            tf.translation = at.extend(-1.5);
+            tf.scale = Vec3::splat(size);
+            palette::tint(&mut materials, &material.0, colour);
+        } else {
+            tf.scale = Vec3::ZERO;
+            palette::tint(&mut materials, &material.0, Color::NONE);
+        }
     }
 }
