@@ -30,12 +30,14 @@ use bevy::app::AppExit;
 use bevy::asset::embedded_asset;
 use bevy::camera::visibility::RenderLayers;
 use bevy::math::CompassOctant;
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 use bevy::sprite_render::{
     AlphaMode2d, ColorMaterial, Material2d, Material2dPlugin, MeshMaterial2d,
 };
+use bevy::ui::Pressed;
 use bevy::window::{CursorEntered, PrimaryWindow, WindowLevel};
 
 use crate::AppState;
@@ -270,15 +272,19 @@ fn scale_ui(
     }
 }
 
+/// Any UI node currently hovered or pressed, i.e. one the pointer belongs to.
+type UiInteractionQuery<'w, 's> =
+    Query<'w, 's, (), (With<Node>, Or<(With<Hovered>, With<Pressed>)>)>;
+
 pub fn block_pointer(
     cursor: Res<Cursor>,
     settings: Res<Settings>,
     opening: Res<Opening>,
-    interactions: Query<&Interaction>,
+    interactions: UiInteractionQuery,
     mut claimed: ResMut<PointerClaimed>,
     mut blocked: ResMut<PointerBlocked>,
 ) {
-    let over_ui = interactions.iter().any(|i| *i != Interaction::None);
+    let over_ui = !interactions.is_empty();
     // The frame in cake mode, and outside the circle in either: whatever of
     // the map shows there when zoomed in is not for clicking.
     let off_map = cursor.ui.is_some_and(|p| {

@@ -7,9 +7,9 @@
 
 use bevy::prelude::*;
 use bevy::render::renderer::{RenderAdapter, RenderInstance};
-use bevy::render::view::ExtractedWindows;
+use bevy::render::view::ExtractedWindow;
 use bevy::render::{Render, RenderApp};
-use bevy::window::CompositeAlphaMode;
+use bevy::window::{CompositeAlphaMode, PrimaryWindow, RawHandleWrapper};
 
 fn main() {
     let mut app = App::new();
@@ -34,7 +34,7 @@ fn main() {
 }
 
 fn probe(
-    windows: Res<ExtractedWindows>,
+    windows: Query<(&ExtractedWindow, &RawHandleWrapper), With<PrimaryWindow>>,
     instance: Res<RenderInstance>,
     adapter: Res<RenderAdapter>,
     mut done: Local<bool>,
@@ -42,17 +42,17 @@ fn probe(
     if *done {
         return;
     }
-    for window in windows.windows.values() {
+    if let Ok((window, handle)) = windows.single() {
         *done = true;
         let target = wgpu::SurfaceTargetUnsafe::RawHandle {
-            raw_display_handle: Some(window.handle.get_display_handle()),
-            raw_window_handle: window.handle.get_window_handle(),
+            raw_display_handle: Some(handle.get_display_handle()),
+            raw_window_handle: handle.get_window_handle(),
         };
         // SAFETY: the handles belong to a live window for the whole call.
         let surface = unsafe { instance.create_surface_unsafe(target) }.expect("a surface");
         let caps = surface.get_capabilities(&adapter);
         println!("adapter:       {:?}", adapter.get_info());
-        println!("display:       {:?}", window.handle.get_display_handle());
+        println!("display:       {:?}", handle.get_display_handle());
         println!("formats:       {:?}", caps.formats);
         println!("alpha modes:   {:?}", caps.alpha_modes);
         println!("present modes: {:?}", caps.present_modes);
