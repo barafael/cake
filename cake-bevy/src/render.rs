@@ -356,11 +356,18 @@ pub fn draw_game(
         // Busy fighting: a spark at its heart, so who is shooting reads
         // through a crowd.
         if e.target.is_some() {
-            glow
-                .circle_2d(Isometry2d::from_translation(at), 4.0, palette::TEXT.with_alpha(0.2))
-                .resolution(8);
+            glow.circle_2d(
+                Isometry2d::from_translation(at),
+                4.0,
+                palette::TEXT.with_alpha(0.2),
+            )
+            .resolution(8);
             gizmos
-                .circle_2d(Isometry2d::from_translation(at), 2.2, palette::TEXT.with_alpha(0.8))
+                .circle_2d(
+                    Isometry2d::from_translation(at),
+                    2.2,
+                    palette::TEXT.with_alpha(0.8),
+                )
                 .resolution(8);
         }
         // Health is a ring around the body: a faint track the whole way

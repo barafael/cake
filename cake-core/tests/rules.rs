@@ -544,23 +544,11 @@ fn the_vision_window_agrees_with_a_full_scan() {
     }
     for (owner, spot) in [
         // Radial pairs a hundred units along from the seam: near it...
-        (
-            0,
-            Pos::new(Angle(0), 425 * UNIT).displaced(100 * UNIT, 0),
-        ),
-        (
-            1,
-            Pos::new(Angle(0), 475 * UNIT).displaced(100 * UNIT, 0),
-        ),
+        (0, Pos::new(Angle(0), 425 * UNIT).displaced(100 * UNIT, 0)),
+        (1, Pos::new(Angle(0), 475 * UNIT).displaced(100 * UNIT, 0)),
         // ...and one pair the exact test must still refuse.
-        (
-            2,
-            Pos::new(Angle(0), 420 * UNIT).displaced(-100 * UNIT, 0),
-        ),
-        (
-            3,
-            Pos::new(Angle(0), 488 * UNIT).displaced(-100 * UNIT, 0),
-        ),
+        (2, Pos::new(Angle(0), 420 * UNIT).displaced(-100 * UNIT, 0)),
+        (3, Pos::new(Angle(0), 488 * UNIT).displaced(-100 * UNIT, 0)),
     ] {
         sim.place(owner, Kind::Econ, spot);
     }

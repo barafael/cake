@@ -497,51 +497,53 @@ pub fn collect(
     let events = std::mem::take(&mut m.events);
     if true {
         for event in events {
-        match event {
-            Event::Shot {
-                from,
-                to,
-                owner,
-                kind,
-            } if settings.sparks && (fx.sight.sees(from) || fx.sight.sees(to)) => {
-                fx.shot(
-                    to_vec2(from),
-                    to_vec2(to),
+            match event {
+                Event::Shot {
+                    from,
+                    to,
+                    owner,
                     kind,
-                    palette::seat(owner as usize),
-                );
-            }
-            Event::Impact {
-                at, owner, kind, ..
-            } if settings.sparks && fx.sight.sees(at) => {
-                fx.impact(to_vec2(at), kind, palette::seat(owner as usize));
-            }
-            // My own losses show even where nothing of mine still sees.
-            Event::Died { owner, kind, pos } if fx.sight.sees(pos) || me == Some(owner) => {
-                let colour = palette::seat(owner as usize);
-                let at = to_vec2(pos);
-                if kind.is_structure() && settings.stains {
-                    fx.stain(at, (kind.stats().radius / UNIT) as f32 * 1.15, colour);
+                } if settings.sparks && (fx.sight.sees(from) || fx.sight.sees(to)) => {
+                    fx.shot(
+                        to_vec2(from),
+                        to_vec2(to),
+                        kind,
+                        palette::seat(owner as usize),
+                    );
                 }
-                if settings.sparks {
-                    fx.died(&shapes, at, kind, colour);
+                Event::Impact {
+                    at, owner, kind, ..
+                } if settings.sparks && fx.sight.sees(at) => {
+                    fx.impact(to_vec2(at), kind, palette::seat(owner as usize));
                 }
+                // My own losses show even where nothing of mine still sees.
+                Event::Died { owner, kind, pos } if fx.sight.sees(pos) || me == Some(owner) => {
+                    let colour = palette::seat(owner as usize);
+                    let at = to_vec2(pos);
+                    if kind.is_structure() && settings.stains {
+                        fx.stain(at, (kind.stats().radius / UNIT) as f32 * 1.15, colour);
+                    }
+                    if settings.sparks {
+                        fx.died(&shapes, at, kind, colour);
+                    }
+                }
+                Event::Blast { at, owner, radius }
+                    if settings.sparks && (fx.sight.sees(at) || me == Some(owner)) =>
+                {
+                    let r = (radius / UNIT) as f32;
+                    fx.blast(to_vec2(at), r, palette::seat(owner as usize));
+                }
+                Event::Completed { owner, kind, pos } if settings.sparks && fx.sight.sees(pos) => {
+                    let size = (kind.stats().radius / UNIT) as f32 + 4.0;
+                    fx.mark(
+                        to_vec2(pos),
+                        0.6,
+                        palette::seat(owner as usize),
+                        Look::Ripple { size },
+                    );
+                }
+                _ => {}
             }
-            Event::Blast { at, owner, radius } if settings.sparks && (fx.sight.sees(at) || me == Some(owner)) => {
-                let r = (radius / UNIT) as f32;
-                fx.blast(to_vec2(at), r, palette::seat(owner as usize));
-            }
-            Event::Completed { owner, kind, pos } if settings.sparks && fx.sight.sees(pos) => {
-                let size = (kind.stats().radius / UNIT) as f32 + 4.0;
-                fx.mark(
-                    to_vec2(pos),
-                    0.6,
-                    palette::seat(owner as usize),
-                    Look::Ripple { size },
-                );
-            }
-            _ => {}
-        }
         }
     }
 
@@ -826,7 +828,11 @@ fn draw(
                 let linger = fade * fade;
                 circle(&mut gizmos, at, size, ash.with_alpha(0.16 * linger));
                 gizmos
-                    .circle_2d(Isometry2d::from_translation(at), size, ash.with_alpha(0.1 * linger))
+                    .circle_2d(
+                        Isometry2d::from_translation(at),
+                        size,
+                        ash.with_alpha(0.1 * linger),
+                    )
                     .resolution(24);
             }
         }

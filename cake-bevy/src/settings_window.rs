@@ -166,9 +166,7 @@ pub fn plugin(app: &mut App) {
                 animate,
                 fps_text,
                 preview,
-                claim
-                    .in_set(PointerSet)
-                    .before(chrome::block_pointer),
+                claim.in_set(PointerSet).before(chrome::block_pointer),
                 click_outside.after(PointerSet),
                 sync_rows,
                 act.after(segments::press),
@@ -273,16 +271,7 @@ fn spawn(
         };
         let (title, detail) = row.describe(settings);
         let e = segments::spawn(
-            commands,
-            meshes,
-            fills,
-            slots,
-            index,
-            count,
-            &title,
-            &detail,
-            state,
-            row,
+            commands, meshes, fills, slots, index, count, &title, &detail, state, row,
         );
         commands.entity(e).insert(Segment {
             row: slots,
@@ -300,9 +289,9 @@ fn spawn(
     for centre in [LENS_ON, LENS_OFF] {
         commands.spawn((
             Mesh2d(meshes.add(Circle::new(LENS).mesh().resolution(48))),
-            MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::srgba(
-                1.0, 1.0, 1.0, 0.04,
-            )))),
+            MeshMaterial2d(
+                materials.add(ColorMaterial::from_color(Color::srgba(1.0, 1.0, 1.0, 0.04))),
+            ),
             Transform::from_translation(centre.extend(-2.0)),
             RenderLayers::layer(OVERLAY_LAYER),
             ChildOf(root),
@@ -507,7 +496,11 @@ fn animate(
         tf.translation = w.from.lerp(Vec2::ZERO, e).extend(DIAL_Z);
         tf.scale = Vec3::splat(0.04 + 0.96 * e);
     }
-    palette::tint(&mut materials, &w.backdrop, Color::BLACK.with_alpha(0.5 * e));
+    palette::tint(
+        &mut materials,
+        &w.backdrop,
+        Color::BLACK.with_alpha(0.5 * e),
+    );
     if w.closing && w.t <= 0.0 {
         if let Ok(mut entity) = commands.get_entity(w.root) {
             entity.despawn();
@@ -662,11 +655,7 @@ fn preview(
             }
             PreviewRole::Flash => {
                 let u = settle(fly, 0.14);
-                (
-                    target,
-                    2.0 + 10.0 * u,
-                    FLAME.with_alpha(0.8 * (1.0 - u)),
-                )
+                (target, 2.0 + 10.0 * u, FLAME.with_alpha(0.8 * (1.0 - u)))
             }
             PreviewRole::Spark(k) => {
                 let u = settle(fly, 0.3);

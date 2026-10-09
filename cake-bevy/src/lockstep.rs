@@ -87,7 +87,10 @@ fn pump(
             }
             NetMsg::Turn { tick, cmds } if !m.is_host() && Some(from) == m.host_peer => {
                 if !m.turns.push(tick, cmds) {
-                    warn!(tick, "refused the host's turn: stale, duplicate, or past the horizon");
+                    warn!(
+                        tick,
+                        "refused the host's turn: stale, duplicate, or past the horizon"
+                    );
                 }
             }
             NetMsg::Hash { tick, hash } if m.is_host() => {

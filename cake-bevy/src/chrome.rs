@@ -38,15 +38,15 @@ use bevy::sprite_render::{
 };
 use bevy::window::{CursorEntered, PrimaryWindow, WindowLevel};
 
+use crate::AppState;
 use crate::arctext::{Reserved, ReservedArcs};
 use crate::camera::{BackdropCamera, Cursor, OVERLAY_LAYER, Opening, backdrop_clear, px_per_unit};
 use crate::palette;
 use crate::render::Shapes;
 use crate::ringmesh::{self, Slots};
+use crate::segments::SegmentFills;
 use crate::settings::{self, DisplayMode, Settings};
 use crate::settings_window::{self, SettingsWindow};
-use crate::segments::SegmentFills;
-use crate::AppState;
 
 /// The whole circle, in circle units.
 pub const RADIUS: f32 = 600.0;
@@ -542,7 +542,11 @@ fn draw(
             ChromeButton::Settings => {
                 // A gear: a ring with eight teeth and a hub. While the dial
                 // is open, it idles round.
-                let spin = if win.is_some() { time.elapsed_secs() } else { 0.0 };
+                let spin = if win.is_some() {
+                    time.elapsed_secs()
+                } else {
+                    0.0
+                };
                 for k in 0..8 {
                     let dir = Vec2::from_angle(spin + k as f32 * std::f32::consts::TAU / 8.0);
                     gizmos.line_2d(

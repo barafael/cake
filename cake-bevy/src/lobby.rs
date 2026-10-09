@@ -241,9 +241,7 @@ fn pump_lobby(
                     m.watching = watching;
                 }
             }
-            NetMsg::Start { players }
-                if !net.sequences() && Some(from) == net.host() =>
-            {
+            NetMsg::Start { players } if !net.sequences() && Some(from) == net.host() => {
                 begin(&mut commands, &net, &mut next, players, false, Some(from));
             }
             // Stale match traffic, or messages only the host acts on.
