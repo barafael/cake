@@ -17,8 +17,8 @@ use cake_core::history::{History, Metric};
 use cake_core::stats::TICK_HZ;
 use cake_core::{Outcome, Seat};
 
-use crate::arctext::{ArcText, Frame};
-use crate::camera::{Cursor, OVERLAY_LAYER};
+use crate::arctext::{ArcText, Frame, Sharp};
+use crate::camera::{CAKE_LAYER, Cursor};
 use crate::chrome::RADIUS;
 use crate::menu::{MENU_INNER, MENU_OUTER};
 use crate::ringmesh::{self, Slots, wrap_pi};
@@ -78,12 +78,12 @@ pub fn plugin(app: &mut App) {
 
 fn configure_gizmos(mut store: ResMut<GizmoConfigStore>) {
     let (lines, _) = store.config_mut::<RecapLines>();
-    lines.render_layers = RenderLayers::layer(OVERLAY_LAYER);
+    lines.render_layers = RenderLayers::layer(CAKE_LAYER);
     lines.line.width = 2.0;
     // Mitred, so a wide curve has no notches at its bends.
     lines.line.joints = GizmoLineJoint::Miter;
     let (glow, _) = store.config_mut::<RecapGlow>();
-    glow.render_layers = RenderLayers::layer(OVERLAY_LAYER);
+    glow.render_layers = RenderLayers::layer(CAKE_LAYER);
     glow.line.width = 7.0;
     glow.line.joints = GizmoLineJoint::Miter;
 }
@@ -233,7 +233,7 @@ fn fell(history: &History, seat: usize) -> Option<u32> {
 
 /// The sample under the pointer, if it is over the chart.
 fn hovered(cursor: &Cursor, history: &History) -> Option<usize> {
-    let p = cursor.ui?;
+    let p = cursor.cake?;
     if !(BASE - 20.0..=RIM + 20.0).contains(&p.length()) {
         return None;
     }
@@ -254,13 +254,10 @@ fn hovered(cursor: &Cursor, history: &History) -> Option<usize> {
 fn text(commands: &mut Commands, at: Vec2, size: f32, color: Color, line: Line) {
     commands.spawn((
         Text2d::new(""),
-        TextFont {
-            font_size: bevy::text::FontSize::Px(size),
-            ..default()
-        },
+        Sharp(size),
         TextColor(color.with_alpha(0.0)),
         Transform::from_translation(at.extend(1.0)),
-        RenderLayers::layer(OVERLAY_LAYER),
+        RenderLayers::layer(CAKE_LAYER),
         DespawnOnExit(AppState::Game),
         line,
     ));
@@ -293,7 +290,7 @@ fn open(
         Mesh2d(meshes.add(ringmesh::ring(0.0, RIM + 18.0, RADIUS))),
         MeshMaterial2d(fill.clone()),
         Transform::from_xyz(0.0, 0.0, -6.0),
-        RenderLayers::layer(OVERLAY_LAYER),
+        RenderLayers::layer(CAKE_LAYER),
         Backdrop(fill),
         DespawnOnExit(AppState::Game),
     ));
@@ -379,13 +376,10 @@ fn open(
         let at = Vec2::from_angle(a) * (RIM + 15.0);
         commands.spawn((
             Text2d::new(format!("{k}m")),
-            TextFont {
-                font_size: bevy::text::FontSize::Px(10.0),
-                ..default()
-            },
+            Sharp(10.0),
             TextColor(palette::DIM_TEXT.with_alpha(0.0)),
             Transform::from_translation(at.extend(1.0)),
-            RenderLayers::layer(OVERLAY_LAYER),
+            RenderLayers::layer(CAKE_LAYER),
             DespawnOnExit(AppState::Game),
             Line::Time,
         ));
@@ -661,7 +655,7 @@ mod tests {
 
     fn pointer(f: f32, r: f32) -> Cursor {
         Cursor {
-            ui: Some(Vec2::from_angle(angle_at(f)) * r),
+            cake: Some(Vec2::from_angle(angle_at(f)) * r),
             ..default()
         }
     }
@@ -677,7 +671,7 @@ mod tests {
         assert_eq!(hovered(&pointer(0.5, 60.0), &history), None);
         assert_eq!(hovered(&pointer(0.5, 400.0), &history), None);
         let gap = Cursor {
-            ui: Some(Vec2::Y * 200.0),
+            cake: Some(Vec2::Y * 200.0),
             ..default()
         };
         assert_eq!(hovered(&gap, &history), None);

@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use bevy::sprite_render::{ColorMaterial, MeshMaterial2d};
 
 use crate::arctext::{ArcText, Frame};
-use crate::camera::{Cursor, OVERLAY_LAYER};
+use crate::camera::{CAKE_LAYER, Cursor};
 use crate::chrome::{PointerClaimed, PointerSet, RADIUS, block_pointer};
 use crate::ringmesh::{Slots, sector_contains};
 use crate::{AppState, palette};
@@ -128,7 +128,7 @@ pub fn spawn(
             Mesh2d(meshes.add(row.mesh(index, count, RADIUS))),
             MeshMaterial2d(fills.idle.clone()),
             Transform::from_xyz(0.0, 0.0, -4.0),
-            RenderLayers::layer(OVERLAY_LAYER),
+            RenderLayers::layer(CAKE_LAYER),
             segment,
             DespawnOnExit(state),
             extra,
@@ -183,7 +183,7 @@ fn hover(
     mut hover: ResMut<SegmentHover>,
     mut claimed: ResMut<PointerClaimed>,
 ) {
-    let over = cursor.ui.and_then(|p| {
+    let over = cursor.cake.and_then(|p| {
         segments
             .iter()
             .find(|(_, s, visible)| visible.get() && s.contains(p))

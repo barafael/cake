@@ -243,11 +243,11 @@ When the game opens, the circle and everything in it grows out of the centre
 to full size over one second, easing out.
 
 The circle is a round window onto the game, in either mode. At first the
-map, the nebula behind it and the players' names fill it exactly. Zooming
-and panning take all three along together, like looking closer at the
-cake, while the window's controls, the readouts in the middle and the menus
-stay where they are. Whatever would show past the circle's edge is masked,
-so the view stays round however far it zooms.
+map, the nebula behind it, the players' names and the readouts and menus in
+the middle fill it exactly. Zooming and panning take all of them along
+together, like looking closer at the cake; only the window's controls stay
+where they are. Whatever would show past the circle's edge is masked, so
+the view stays round however far it zooms.
 
 ### Effects
 
@@ -352,16 +352,19 @@ field slowly wavers back and forth. The seed is the room name, so everyone
 in a room sees the same sky.
 
 It belongs to the circle: at the fitted view it fills it, and it zooms and
-pans with the map. A cake camera draws it, and the players' names, behind
-the map; it follows the map camera's pan and zoom but not its turn, so the
-sky stays upright. Behind that, a fixed backdrop draws a dark disk that
+pans with the map. A cake camera draws it, and the players' names, the
+menus and the recap, behind the map; it follows the map camera's pan and
+zoom but not its turn, so the sky and the words stay upright. The readouts
+in the middle are Bevy UI, which is laid out in its own pixels, so they
+follow by other means: the UI scale tracks the zoom and the box they sit in
+is moved with the pan. Behind that, a fixed backdrop draws a dark disk that
 fills the round viewport, which shows around the nebula when the view is
 zoomed out.
 
 Text is rasterised at its font size whatever the camera does, so the names
-are rasterised at a power of two times their size that follows the zoom,
-and scaled back down: sharp up close, and only a few sizes in the font
-atlas.
+and the recap's text are rasterised at a power of two times their size that
+follows the zoom, and scaled back down: sharp up close, and only a few
+sizes in the font atlas.
 
 ## Architecture
 

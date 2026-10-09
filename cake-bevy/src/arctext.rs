@@ -1,10 +1,11 @@
 //! Text that runs along a circular arc, centred on an angle of the ring.
 //!
 //! Each character is its own `Text2d`, placed along the arc and turned to
-//! follow it. The arc's radius is in circle units. A label is either on the
-//! circle ([`Frame::Map`]: its angle is on the map, so a name stays beside its
-//! sector, and it zooms and pans with the map) or on the screen
-//! ([`Frame::Screen`]: it stays put, like the rest of the UI).
+//! follow it. The arc's radius is in circle units. A label's angle is either
+//! on the map ([`Frame::Map`]: a name stays beside its sector as the view
+//! turns) or on the screen ([`Frame::Screen`]: a menu's title stays at the
+//! bottom whichever way the view is turned). Either way the label zooms and
+//! pans with the map, like everything inside the circle.
 //!
 //! On the upper half of the fitted view the text reads left to right with its
 //! tops toward the rim; on the lower half it flips, so it reads left to right
@@ -15,7 +16,8 @@
 //!
 //! Text is rasterised at its font size whatever the zoom, so a label zoomed in
 //! would blur: its glyphs are rasterised larger and scaled back down, by a
-//! power of two that follows how many pixels a circle unit covers.
+//! power of two that follows how many pixels a circle unit covers. Any other
+//! `Text2d` inside the circle gets the same treatment from [`Sharp`].
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -23,7 +25,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use crate::camera::{CAKE_LAYER, OVERLAY_LAYER, Rig, px_per_unit};
+use crate::camera::{CAKE_LAYER, Rig, px_per_unit};
 use crate::ringmesh::wrap_pi;
 
 /// Where players' names run: on the ring beyond the map.
@@ -40,25 +42,15 @@ const MAX_RASTER: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Frame {
-    /// On the circle: the angle is on the map, and the label turns with the
-    /// view, and zooms and pans with it.
+    /// The angle is on the map: the label turns with the view.
     #[default]
     Map,
-    /// On the screen: the angle is the screen's, and the label stays put.
+    /// The angle is the screen's: the label does not turn with the view.
     Screen,
 }
 
-impl Frame {
-    fn layer(self) -> RenderLayers {
-        RenderLayers::layer(match self {
-            Frame::Map => CAKE_LAYER,
-            Frame::Screen => OVERLAY_LAYER,
-        })
-    }
-}
-
 /// A line of text laid along an arc. Its glyphs are children of this entity,
-/// respawned when the text, size or frame changes, or the zoom wants them
+/// respawned when the text or size changes, or the zoom wants them
 /// rasterised at another scale; angle, radius and colour just move and tint
 /// them, so a label can slide and fade every frame.
 #[derive(Component, Clone, Debug, PartialEq)]
@@ -114,14 +106,24 @@ struct Glyph(usize);
 struct Built {
     text: String,
     size: f32,
-    frame: Frame,
     /// The glyphs are rasterised at this many times `size`, and scaled back.
     raster: f32,
 }
 
+/// A `Text2d` inside the circle, of this font size in circle units, kept
+/// sharp as the view zooms: its font is set to the size times the raster
+/// factor, and its transform's scale to the inverse.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct Sharp(pub f32);
+
 pub fn plugin(app: &mut App) {
     app.init_resource::<ReservedArcs>()
-        .add_systems(Update, (rebuild, place).chain());
+        .add_systems(Update, (sharpen, rebuild, place).chain());
+}
+
+/// How many times their size the circle's texts are rasterised at now.
+fn raster_now(rig: &Rig, window: Option<&Window>) -> f32 {
+    raster(window.map_or(1.0, px_per_unit) / rig.zoom)
 }
 
 /// How many times its size to rasterise text at, when one of its circle
@@ -131,7 +133,7 @@ fn raster(px: f32) -> f32 {
     px.max(1.0).log2().round().exp2().min(MAX_RASTER)
 }
 
-/// Respawn the glyphs of every label whose text, size or frame changed, or
+/// Respawn the glyphs of every label whose text or size changed, or
 /// whose glyphs are due to be rasterised at another scale.
 #[allow(clippy::type_complexity)]
 fn rebuild(
@@ -140,24 +142,15 @@ fn rebuild(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     labels: Query<(Entity, &ArcText, Option<&Built>, Option<&Children>)>,
 ) {
-    let px = window.map_or(1.0, |w| px_per_unit(&w));
+    let raster = raster_now(&rig, window.as_ref().map(|w| **w));
     for (entity, label, built, children) in &labels {
-        let raster = raster(match label.frame {
-            Frame::Map => px / rig.zoom,
-            Frame::Screen => px,
-        });
-        if built.is_some_and(|b| {
-            b.text == label.text
-                && b.size == label.size
-                && b.frame == label.frame
-                && b.raster == raster
-        }) {
+        if built.is_some_and(|b| b.text == label.text && b.size == label.size && b.raster == raster)
+        {
             continue;
         }
         commands.entity(entity).insert(Built {
             text: label.text.clone(),
             size: label.size,
-            frame: label.frame,
             raster,
         });
         if let Some(children) = children {
@@ -177,9 +170,28 @@ fn rebuild(
                 },
                 TextColor(label.color),
                 Glyph(i),
-                label.frame.layer(),
+                RenderLayers::layer(CAKE_LAYER),
                 ChildOf(entity),
             ));
+        }
+    }
+}
+
+/// Rasterise every [`Sharp`] text at the scale the zoom wants now.
+fn sharpen(
+    rig: Res<Rig>,
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    mut texts: Query<(&Sharp, &mut TextFont, &mut Transform)>,
+) {
+    let raster = raster_now(&rig, window.as_ref().map(|w| **w));
+    for (sharp, mut font, mut tf) in &mut texts {
+        let size = bevy::text::FontSize::Px(sharp.0 * raster);
+        if font.font_size != size {
+            font.font_size = size;
+        }
+        let scale = Vec3::splat(raster.recip());
+        if tf.scale != scale {
+            tf.scale = scale;
         }
     }
 }

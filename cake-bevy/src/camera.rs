@@ -4,21 +4,26 @@
 //! round viewport whatever the view does.
 //!
 //! The **cake** camera draws what belongs to the circle besides the map: the
-//! nebula, and the players' names on the ring beyond the map. It zooms and
-//! pans with the map but does not turn: the names follow the view's rotation
-//! by their own layout (see [`crate::arctext`]), and the sky stays upright.
+//! nebula, the players' names on the ring beyond the map, and everything
+//! inside the ring: the readouts, the menus, the recap. It zooms and pans
+//! with the map but does not turn: the names follow the view's rotation by
+//! their own layout (see [`crate::arctext`]), and the sky and the words stay
+//! upright.
 //!
 //! The **main** camera looks at the map: the whole ring fits the window, the
 //! view is turned so my HQ sits at the bottom with my neighbours to the left
 //! and right, and it zooms and pans.
 //!
 //! The **overlay** camera is fixed too, and draws on top: the mask outside the
-//! circle, the window chrome and the UI.
+//! circle and the window chrome. It is also the UI camera; UI nodes are laid
+//! out in their own pixels, so the readouts in the middle, which are UI,
+//! follow the cake camera by other means: [`UiScale`] zooms them and the
+//! [`CircleBox`] they sit in is moved with the pan (see [`follow_ui`]).
 //!
 //! The fixed cameras measure in "circle units": the circle (radius 600)
 //! always fits the window. At zoom 1 the cake and map cameras agree, so the
-//! map, its names and its sky sit exactly inside the frame; zoomed, they grow
-//! together behind the round viewport.
+//! map, its names, its sky and its UI sit exactly inside the frame; zoomed,
+//! they grow together behind the round viewport.
 //!
 //! When the app opens, everything grows out of the centre: see [`Opening`].
 
@@ -27,7 +32,7 @@ use bevy::camera::{CameraOutputMode, ScalingMode};
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy::render::render_resource::BlendState;
-use bevy::ui::IsDefaultUiCamera;
+use bevy::ui::{IsDefaultUiCamera, UiTransform, Val2};
 use bevy::window::PrimaryWindow;
 
 use crate::chrome::{PointerBlocked, PointerSet, RADIUS};
@@ -105,11 +110,22 @@ pub struct OverlayCamera;
 #[derive(Component)]
 pub struct BackdropCamera;
 
-/// The cursor: in viewport pixels, in world units, and in circle units.
+/// A UI box the size of the circle, in circle units, whose top-left corner
+/// is laid out at the window's centre: [`follow_ui`] moves it so that its
+/// middle is where the cake camera shows the circle's centre, and so its
+/// contents zoom and pan with the map. Spawn it with a [`UiTransform`].
+#[derive(Component)]
+pub struct CircleBox;
+
+/// The cursor: in viewport pixels; in world units, as the map sees it; in
+/// cake units, zoomed and panned with the map but not turned, where the
+/// menus and the recap are; and in circle units, fixed to the window, where
+/// the chrome is.
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct Cursor {
     pub viewport: Option<Vec2>,
     pub world: Option<Vec2>,
+    pub cake: Option<Vec2>,
     pub ui: Option<Vec2>,
 }
 
@@ -125,7 +141,12 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, track_cursor.in_set(PointerSet))
         .add_systems(
             Update,
-            (open, controls.run_if(in_state(AppState::Game)), apply)
+            (
+                open,
+                controls.run_if(in_state(AppState::Game)),
+                apply,
+                follow_ui,
+            )
                 .chain()
                 .after(PointerSet),
         );
@@ -326,6 +347,30 @@ fn apply(
     }
 }
 
+/// Take the UI along with the cake camera: scale it so that one UI pixel is
+/// one unit of that camera's view, zoom and opening included, and move each
+/// [`CircleBox`] with the pan, as the screen sees it.
+fn follow_ui(
+    window: Single<&Window, With<PrimaryWindow>>,
+    rig: Res<Rig>,
+    opening: Res<Opening>,
+    mut scale: ResMut<UiScale>,
+    mut boxes: Query<&mut UiTransform, With<CircleBox>>,
+) {
+    let s = px_per_unit(&window) * opening.scale() / rig.zoom;
+    if scale.0 != s {
+        scale.0 = s;
+    }
+    // The pan moves the world the other way on screen, and UI y runs down.
+    let pan = Mat2::from_angle(-rig.rotation) * rig.pan;
+    let translation = Val2::px(-RADIUS - pan.x, -RADIUS + pan.y);
+    for mut tf in &mut boxes {
+        if tf.translation != translation {
+            tf.translation = translation;
+        }
+    }
+}
+
 fn set_scale(projection: &mut Projection, scale: f32) {
     if let Projection::Orthographic(ortho) = projection
         && ortho.scale != scale
@@ -337,6 +382,7 @@ fn set_scale(projection: &mut Projection, scale: f32) {
 pub fn track_cursor(
     window: Single<&Window, With<PrimaryWindow>>,
     main: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    cake: Query<(&Camera, &GlobalTransform), With<CakeCamera>>,
     overlay: Query<(&Camera, &GlobalTransform), With<OverlayCamera>>,
     mut cursor: ResMut<Cursor>,
 ) {
@@ -348,6 +394,7 @@ pub fn track_cursor(
     *cursor = Cursor {
         viewport,
         world: through(main.single()),
+        cake: through(cake.single()),
         ui: through(overlay.single()),
     };
 }
