@@ -113,7 +113,7 @@ pub struct BackdropCamera;
 /// is laid out at the window's centre: [`follow_ui`] moves it so that its
 /// middle is where the cake camera shows the circle's centre, and so its
 /// contents zoom and pan with the map. Spawn it with a [`UiTransform`].
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct CircleBox;
 
 /// The cursor: in viewport pixels; in world units, as the map sees it; in
@@ -220,7 +220,7 @@ fn spawn(mut commands: Commands, settings: Res<Settings>) {
         Camera {
             order: 1,
             clear_color: ClearColorConfig::None,
-            // Replace, not blend: as the second camera on the window it would
+            // Replace, not blend: as a later camera on the window it would
             // otherwise be blended over by default, and the chrome's
             // transparent pixels would never reach the window.
             output_mode: CameraOutputMode::Write {

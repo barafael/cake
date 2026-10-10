@@ -1,12 +1,12 @@
 //! Everything you read or click lives inside the circle.
 //!
-//! The UI is laid out on a box the size of the circle, centred in the window,
-//! in circle units (the chrome scales [`UiScale`] so one UI pixel is one
-//! unit). The map's band runs from radius 400 to 500, so the lobby and the
-//! match HUD fill the inner disk, inside radius ~390, and stay put while the
-//! map zooms. Players' names run along the ring beyond the map, each in their
-//! own sector, as [`ArcText`] on the circle, so they zoom with the map; the
-//! selected unit's menu is in [`crate::menu`].
+//! The UI is laid out on a [`CircleBox`], a box the size of the circle, in
+//! circle units, which zooms and pans with the map (see
+//! [`crate::camera`]). The map's band runs from radius 400 to 500, so the
+//! lobby and the match HUD fill the inner disk, inside radius ~390. Players'
+//! names run along the ring beyond the map, each in their own sector, as
+//! [`ArcText`] on the circle; the selected unit's menu is in
+//! [`crate::menu`].
 
 use bevy::prelude::*;
 use bevy_matchbox::prelude::MatchboxSocket;
@@ -16,7 +16,7 @@ use cake_core::stats::{self, Kind, SUPPLY, TICK_HZ};
 use cake_net::{NetState, RoomId};
 
 use crate::arctext::{ArcText, Frame};
-use crate::camera::CAKE_LAYER;
+use crate::camera::{CAKE_LAYER, CircleBox};
 use crate::chrome::{ChromeButton, RADIUS};
 use crate::input::{Mode, Selection};
 use crate::lobby::{Lobby, LobbyAction, LobbyInput, display_name, my_key};
@@ -131,26 +131,23 @@ fn place(x: f32, y: f32, w: f32, h: f32) -> Node {
     }
 }
 
-/// The box the circle occupies, centred in the window, holding `contents`
-/// and despawned when `state` ends.
+/// The box the circle occupies, holding `contents` and despawned when
+/// `state` ends. It starts where the fitted view has the circle, centred in
+/// the window; [`CircleBox`] takes it from there.
 fn circle_box(state: AppState, contents: impl SceneList) -> impl Scene {
     let scoped = DespawnOnExit(state);
     bsn! {
         Node {
-            width: percent(100),
-            height: percent(100),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
+            position_type: PositionType::Absolute,
+            left: percent(50),
+            top: percent(50),
+            width: px(2.0 * RADIUS),
+            height: px(2.0 * RADIUS),
         }
+        UiTransform { translation: Val2::px(-RADIUS, -RADIUS) }
+        CircleBox
         scoped
-        Children [
-            Node {
-                width: px(2.0 * RADIUS),
-                height: px(2.0 * RADIUS),
-                flex_shrink: 0.0,
-            }
-            Children [ {contents} ]
-        ]
+        Children [ {contents} ]
     }
 }
 

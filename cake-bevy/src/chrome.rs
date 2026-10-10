@@ -37,7 +37,7 @@ use bevy::window::{PrimaryWindow, WindowLevel};
 
 use crate::AppState;
 use crate::arctext::{Reserved, ReservedArcs};
-use crate::camera::{BackdropCamera, Cursor, OVERLAY_LAYER, Opening, backdrop_clear, px_per_unit};
+use crate::camera::{BackdropCamera, Cursor, OVERLAY_LAYER, Opening, backdrop_clear};
 use crate::palette;
 use crate::render::Shapes;
 use crate::ringmesh::{self, Slots};
@@ -168,11 +168,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, block_pointer.in_set(PointerSet))
         .add_systems(
             Update,
-            (
-                scale_ui,
-                (press, draw, shade).run_if(cake_mode),
-                apply_style,
-            )
+            ((press, draw, shade).run_if(cake_mode), apply_style)
                 .chain()
                 .after(PointerSet),
         );
@@ -251,19 +247,6 @@ fn spawn(
             ShownIn(DisplayMode::Cake),
             visibility(DisplayMode::Cake, &settings),
         ));
-    }
-}
-
-/// Scale the UI with the window, so one UI pixel is one circle unit and
-/// the circle's contents always fit it; and with the opening.
-fn scale_ui(
-    window: Single<&Window, With<PrimaryWindow>>,
-    opening: Res<Opening>,
-    mut scale: ResMut<UiScale>,
-) {
-    let s = px_per_unit(&window) * opening.scale();
-    if scale.0 != s {
-        scale.0 = s;
     }
 }
 
