@@ -32,7 +32,6 @@ use bevy::camera::{CameraOutputMode, ScalingMode};
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy::render::render_resource::BlendState;
-use bevy::ui::{IsDefaultUiCamera, UiTransform, Val2};
 use bevy::window::PrimaryWindow;
 
 use crate::chrome::{PointerBlocked, PointerSet, RADIUS};

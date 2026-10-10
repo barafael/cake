@@ -12,7 +12,6 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
-use bevy::sprite_render::{ColorMaterial, MeshMaterial2d};
 use cake_core::history::{History, Metric};
 use cake_core::stats::TICK_HZ;
 use cake_core::{Outcome, Seat};

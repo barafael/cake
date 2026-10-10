@@ -2,7 +2,6 @@
 //! everything clickable.
 
 use bevy::prelude::*;
-use bevy::sprite_render::ColorMaterial;
 
 /// One colour per seat, bright against the dark background and distinct from
 /// each other at polyline thickness.

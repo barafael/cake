@@ -10,7 +10,6 @@
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
-use bevy::sprite_render::{ColorMaterial, MeshMaterial2d};
 
 use crate::arctext::{ArcText, Frame};
 use crate::camera::{CAKE_LAYER, Cursor};

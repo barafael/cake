@@ -26,17 +26,14 @@
 //! where the pointer is and whether the map may have it ([`PointerBlocked`]),
 //! and everything that reacts to the pointer runs after it.
 
-use bevy::app::AppExit;
 use bevy::asset::embedded_asset;
 use bevy::camera::visibility::RenderLayers;
 use bevy::math::CompassOctant;
 use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
-use bevy::sprite_render::{
-    AlphaMode2d, ColorMaterial, Material2d, Material2dPlugin, MeshMaterial2d,
-};
-use bevy::window::{CursorEntered, PrimaryWindow, WindowLevel};
+use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dPlugin};
+use bevy::window::{PrimaryWindow, WindowLevel};
 
 use crate::AppState;
 use crate::arctext::{Reserved, ReservedArcs};
@@ -138,8 +135,8 @@ impl ChromeButton {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PointerSet;
 
-/// Is the pointer somewhere the map should not react to: a UI button, a
-/// menu slot, the frame, or anywhere while the window is still opening?
+/// Is the pointer somewhere the map should not react to: a segment, the
+/// settings dial, the frame, or anywhere while the window is still opening?
 #[derive(Resource, Default, Debug, PartialEq)]
 pub struct PointerBlocked(pub bool);
 

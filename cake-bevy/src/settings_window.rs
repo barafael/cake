@@ -17,7 +17,6 @@ use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::PrimitiveTopology;
 use bevy::prelude::*;
-use bevy::sprite_render::{ColorMaterial, MeshMaterial2d};
 use cake_core::Kind;
 
 use crate::arctext::ArcText;

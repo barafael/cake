@@ -8,7 +8,6 @@
 //! own sector, as [`ArcText`] on the circle, so they zoom with the map; the
 //! selected unit's menu is in [`crate::menu`].
 
-use bevy::ecs::system::EntityCommands;
 use bevy::prelude::*;
 use bevy_matchbox::prelude::MatchboxSocket;
 use cake_core::Seat;
@@ -73,31 +72,31 @@ const TOP_SLOT: Slots = Slots {
     clockwise: true,
 };
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct LobbyInfo;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct LobbyRoster;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct LobbyStatus;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct LobbyKeys;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct EconomyText;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct QueueText;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct SelectionText;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct HintText;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct BannerText;
 
 /// What the middle says to a watcher instead of "Watching", with the
@@ -109,26 +108,11 @@ pub struct Caption(pub String);
 #[derive(Component)]
 struct SeatLabel(Seat);
 
-/// Bevy's built-in font covers ASCII only, so everything shown here is ASCII.
-fn font(size: f32) -> TextFont {
-    TextFont {
-        font_size: FontSize::Px(size),
-        ..default()
-    }
-}
-
 fn capitalised(s: &str) -> String {
     let mut c = s.chars();
     c.next()
         .map(|first| first.to_uppercase().chain(c).collect())
         .unwrap_or_default()
-}
-
-fn centered() -> TextLayout {
-    TextLayout {
-        justify: Justify::Center,
-        ..default()
-    }
 }
 
 /// A box of `w` x `h` centred on `(x, y)` in circle units (y up), inside the
@@ -146,50 +130,40 @@ fn place(x: f32, y: f32, w: f32, h: f32) -> Node {
     }
 }
 
-/// The box the circle occupies, centred in the window, despawned when
-/// `state` ends.
-fn circle_box(commands: &mut Commands, state: AppState) -> Entity {
-    let root = commands
-        .spawn((
+/// The box the circle occupies, centred in the window, holding `contents`
+/// and despawned when `state` ends.
+fn circle_box(state: AppState, contents: impl SceneList) -> impl Scene {
+    let scoped = DespawnOnExit(state);
+    bsn! {
+        Node {
+            width: percent(100),
+            height: percent(100),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+        }
+        scoped
+        Children [
             Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            DespawnOnExit(state),
-        ))
-        .id();
-    commands
-        .spawn((
-            Node {
-                width: Val::Px(2.0 * RADIUS),
-                height: Val::Px(2.0 * RADIUS),
+                width: px(2.0 * RADIUS),
+                height: px(2.0 * RADIUS),
                 flex_shrink: 0.0,
-                ..default()
-            },
-            ChildOf(root),
-        ))
-        .id()
+            }
+            Children [ {contents} ]
+        ]
+    }
 }
 
-fn text<'a>(
-    commands: &'a mut Commands,
-    parent: Entity,
-    node: Node,
-    content: &str,
-    size: f32,
-    color: Color,
-) -> EntityCommands<'a> {
-    commands.spawn((
-        node,
-        Text::new(content),
-        font(size),
-        TextColor(color),
-        centered(),
-        ChildOf(parent),
-    ))
+/// Centred text in `node`'s box, `size` circle units high. Bevy's built-in
+/// font covers ASCII only, so everything shown here is ASCII.
+fn readout(node: Node, content: &str, size: f32, color: Color) -> impl Scene {
+    let content = content.to_string();
+    bsn! {
+        node
+        Text(content)
+        TextFont { font_size: FontSize::Px(size) }
+        TextColor(color)
+        TextLayout { justify: Justify::Center }
+    }
 }
 
 // ---- Segments --------------------------------------------------------------
@@ -271,36 +245,19 @@ fn spawn_lobby(
             DespawnOnExit(AppState::Lobby),
         ));
     }
-    let b = circle_box(c, AppState::Lobby);
-    text(
-        c,
-        b,
-        place(0.0, 150.0, 600.0, 56.0),
-        "",
-        15.0,
-        palette::TEXT,
-    )
-    .insert(LobbyInfo);
-    text(
-        c,
-        b,
-        place(0.0, 30.0, 460.0, 150.0),
-        "",
-        16.0,
-        palette::DIM_TEXT,
-    )
-    .insert(LobbyRoster);
-    text(c, b, place(0.0, -80.0, 560.0, 22.0), "", 14.0, palette::BAD).insert(LobbyStatus);
     let keys = "Keys: B add bot   X remove   W watch/play   Enter start";
-    text(
-        c,
-        b,
-        place(0.0, -215.0, 520.0, 20.0),
-        keys,
-        13.0,
-        palette::DIM_TEXT,
-    )
-    .insert(LobbyKeys);
+    c.spawn_scene(circle_box(
+        AppState::Lobby,
+        bsn_list! {
+            @readout(place(0.0, 150.0, 600.0, 56.0), "", 15.0, palette::TEXT) LobbyInfo
+            --
+            @readout(place(0.0, 30.0, 460.0, 150.0), "", 16.0, palette::DIM_TEXT) LobbyRoster
+            --
+            @readout(place(0.0, -80.0, 560.0, 22.0), "", 14.0, palette::BAD) LobbyStatus
+            --
+            @readout(place(0.0, -215.0, 520.0, 20.0), keys, 13.0, palette::DIM_TEXT) LobbyKeys
+        },
+    ));
 
     let row = [
         ("Add bot", "B", LobbyAction::AddBot),
@@ -458,45 +415,20 @@ fn update_lobby(
 // ---- Match -----------------------------------------------------------------
 
 fn spawn_game(mut commands: Commands) {
-    let c = &mut commands;
-    let b = circle_box(c, AppState::Game);
-    text(
-        c,
-        b,
-        place(0.0, 185.0, 620.0, 64.0),
-        "",
-        24.0,
-        palette::TEXT,
-    )
-    .insert(BannerText);
-    text(c, b, place(0.0, 62.0, 600.0, 26.0), "", 20.0, palette::TEXT).insert(EconomyText);
-    text(
-        c,
-        b,
-        place(0.0, 32.0, 600.0, 20.0),
-        "",
-        14.0,
-        palette::DIM_TEXT,
-    )
-    .insert(QueueText);
-    text(
-        c,
-        b,
-        place(0.0, -18.0, 620.0, 22.0),
-        "",
-        15.0,
-        palette::TEXT,
-    )
-    .insert(SelectionText);
-    text(
-        c,
-        b,
-        place(0.0, -198.0, 560.0, 40.0),
-        "",
-        13.0,
-        palette::DIM_TEXT,
-    )
-    .insert(HintText);
+    commands.spawn_scene(circle_box(
+        AppState::Game,
+        bsn_list! {
+            @readout(place(0.0, 185.0, 620.0, 64.0), "", 24.0, palette::TEXT) BannerText
+            --
+            @readout(place(0.0, 62.0, 600.0, 26.0), "", 20.0, palette::TEXT) EconomyText
+            --
+            @readout(place(0.0, 32.0, 600.0, 20.0), "", 14.0, palette::DIM_TEXT) QueueText
+            --
+            @readout(place(0.0, -18.0, 620.0, 22.0), "", 15.0, palette::TEXT) SelectionText
+            --
+            @readout(place(0.0, -198.0, 560.0, 40.0), "", 13.0, palette::DIM_TEXT) HintText
+        },
+    ));
 }
 
 fn spawn_labels(mut commands: Commands, m: Res<Match>) {

@@ -19,7 +19,6 @@ use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::sprite_render::{ColorMaterial, MeshMaterial2d};
 use cake_net::RoomId;
 
 use crate::settings::Settings;
