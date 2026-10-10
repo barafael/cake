@@ -1460,7 +1460,7 @@ dependencies = [
 [[package]]
 name = "bevy_matchbox"
 version = "0.15.0"
-source = "git+https://github.com/barafael/matchbox.git?branch=main#27b5e50254ee8d113bbbec964185c562c3c2bee8"
+source = "git+https://github.com/barafael/matchbox.git?rev=27b5e50254ee8d113bbbec964185c562c3c2bee8#27b5e50254ee8d113bbbec964185c562c3c2bee8"
 dependencies = [
  "bevy",
  "cfg-if",
@@ -4631,7 +4631,7 @@ dependencies = [
 [[package]]
 name = "matchbox_protocol"
 version = "0.15.0"
-source = "git+https://github.com/barafael/matchbox.git?branch=main#27b5e50254ee8d113bbbec964185c562c3c2bee8"
+source = "git+https://github.com/barafael/matchbox.git?rev=27b5e50254ee8d113bbbec964185c562c3c2bee8#27b5e50254ee8d113bbbec964185c562c3c2bee8"
 dependencies = [
  "cfg-if",
  "derive_more",
@@ -4663,7 +4663,7 @@ dependencies = [
 [[package]]
 name = "matchbox_socket"
 version = "0.15.0"
-source = "git+https://github.com/barafael/matchbox.git?branch=main#27b5e50254ee8d113bbbec964185c562c3c2bee8"
+source = "git+https://github.com/barafael/matchbox.git?rev=27b5e50254ee8d113bbbec964185c562c3c2bee8#27b5e50254ee8d113bbbec964185c562c3c2bee8"
 dependencies = [
  "async-compat",
  "async-trait",
