@@ -15,8 +15,8 @@
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
+use bevy::mesh::PrimitiveTopology;
 use bevy::prelude::*;
-use bevy::render::render_resource::PrimitiveTopology;
 use bevy::sprite_render::{ColorMaterial, MeshMaterial2d};
 use cake_core::Kind;
 
@@ -369,7 +369,7 @@ fn spawn(
     commands.spawn((
         Text2d::new(""),
         TextFont {
-            font_size: bevy::text::FontSize::Px(14.0),
+            font_size: FontSize::Px(14.0),
             ..default()
         },
         TextColor(palette::TEXT),
@@ -385,7 +385,7 @@ fn spawn(
         commands.spawn((
             Text2d::new(word),
             TextFont {
-                font_size: bevy::text::FontSize::Px(9.0),
+                font_size: FontSize::Px(9.0),
                 ..default()
             },
             TextColor(palette::DIM_TEXT),

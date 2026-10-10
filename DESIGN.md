@@ -321,7 +321,7 @@ asks for the move (and forgets all buttons whenever the pointer re-enters the
 window): a button left "held" would make the next real press not count, and
 every action on the frame would take two clicks.
 
-What the platform allows, as found for Bevy 0.19 / winit 0.30:
+What the platform allows, as found for Bevy 0.20 / winit 0.30:
 
 | Capability | Support |
 |---|---|

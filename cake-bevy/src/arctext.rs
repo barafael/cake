@@ -165,7 +165,7 @@ fn rebuild(
             commands.spawn((
                 Text2d::new(ch.to_string()),
                 TextFont {
-                    font_size: bevy::text::FontSize::Px(label.size * raster),
+                    font_size: FontSize::Px(label.size * raster),
                     ..default()
                 },
                 TextColor(label.color),
@@ -185,7 +185,7 @@ fn sharpen(
 ) {
     let raster = raster_now(&rig, window.as_ref().map(|w| **w));
     for (sharp, mut font, mut tf) in &mut texts {
-        let size = bevy::text::FontSize::Px(sharp.0 * raster);
+        let size = FontSize::Px(sharp.0 * raster);
         if font.font_size != size {
             font.font_size = size;
         }
