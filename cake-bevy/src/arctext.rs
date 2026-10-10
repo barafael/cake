@@ -5,7 +5,9 @@
 //! on the map ([`Frame::Map`]: a name stays beside its sector as the view
 //! turns) or on the screen ([`Frame::Screen`]: a menu's title stays at the
 //! bottom whichever way the view is turned). Either way the label zooms and
-//! pans with the map, like everything inside the circle.
+//! pans with the map, like everything inside the circle, unless it has
+//! [`RenderLayers`] of its own: its glyphs are drawn there instead, so a
+//! label on the overlay (the settings dial's) stays fixed to the window.
 //!
 //! On the upper half of the fitted view the text reads left to right with its
 //! tops toward the rim; on the lower half it flips, so it reads left to right
@@ -121,9 +123,9 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, (sharpen, rebuild, place).chain());
 }
 
-/// How many times their size the circle's texts are rasterised at now.
-fn raster_now(rig: &Rig, window: Option<&Window>) -> f32 {
-    raster(window.map_or(1.0, px_per_unit) / rig.zoom)
+/// How many times their size texts are rasterised at now, seen at `zoom`.
+fn raster_now(zoom: f32, window: Option<&Window>) -> f32 {
+    raster(window.map_or(1.0, px_per_unit) / zoom)
 }
 
 /// How many times its size to rasterise text at, when one of its circle
@@ -140,10 +142,23 @@ fn rebuild(
     mut commands: Commands,
     rig: Res<Rig>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
-    labels: Query<(Entity, &ArcText, Option<&Built>, Option<&Children>)>,
+    labels: Query<(
+        Entity,
+        &ArcText,
+        Option<&RenderLayers>,
+        Option<&Built>,
+        Option<&Children>,
+    )>,
 ) {
-    let raster = raster_now(&rig, window.as_ref().map(|w| **w));
-    for (entity, label, built, children) in &labels {
+    let cake = RenderLayers::layer(CAKE_LAYER);
+    for (entity, label, layers, built, children) in &labels {
+        let layers = layers.unwrap_or(&cake);
+        let zoom = if layers.intersects(&cake) {
+            rig.zoom
+        } else {
+            1.0
+        };
+        let raster = raster_now(zoom, window.as_ref().map(|w| **w));
         if built.is_some_and(|b| b.text == label.text && b.size == label.size && b.raster == raster)
         {
             continue;
@@ -170,7 +185,7 @@ fn rebuild(
                 },
                 TextColor(label.color),
                 Glyph(i),
-                RenderLayers::layer(CAKE_LAYER),
+                layers.clone(),
                 ChildOf(entity),
             ));
         }
@@ -183,7 +198,7 @@ fn sharpen(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     mut texts: Query<(&Sharp, &mut TextFont, &mut Transform)>,
 ) {
-    let raster = raster_now(&rig, window.as_ref().map(|w| **w));
+    let raster = raster_now(rig.zoom, window.as_ref().map(|w| **w));
     for (sharp, mut font, mut tf) in &mut texts {
         let size = FontSize::Px(sharp.0 * raster);
         if font.font_size != size {

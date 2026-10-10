@@ -16,6 +16,7 @@ use cake_core::stats::{self, Kind, SUPPLY, TICK_HZ};
 use cake_net::{NetState, RoomId};
 
 use crate::arctext::{ArcText, Frame};
+use crate::camera::CAKE_LAYER;
 use crate::chrome::{ChromeButton, RADIUS};
 use crate::input::{Mode, Selection};
 use crate::lobby::{Lobby, LobbyAction, LobbyInput, display_name, my_key};
@@ -270,6 +271,7 @@ fn spawn_lobby(
             c,
             &mut meshes,
             &fills,
+            CAKE_LAYER,
             LOBBY_ROW,
             i,
             row.len(),
@@ -288,6 +290,7 @@ fn spawn_lobby(
             c,
             &mut meshes,
             &fills,
+            CAKE_LAYER,
             TOP_SLOT,
             i,
             slots,
@@ -301,6 +304,7 @@ fn spawn_lobby(
         c,
         &mut meshes,
         &fills,
+        CAKE_LAYER,
         TOP_SLOT,
         slots - 1,
         slots,
@@ -606,6 +610,7 @@ fn update_game(
             &mut commands,
             &mut meshes,
             &fills,
+            CAKE_LAYER,
             TOP_SLOT,
             0,
             1,

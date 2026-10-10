@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use cake_core::geom::{R_INNER, UNIT};
 use cake_core::stats::Kind;
 
+use crate::camera::CAKE_LAYER;
 use crate::input::{Act, Mode, Selection};
 use crate::ringmesh::Slots;
 use crate::segments::{self, Segment, SegmentFills, SegmentPressed};
@@ -114,6 +115,7 @@ fn rebuild(
             &mut commands,
             &mut meshes,
             &fills,
+            CAKE_LAYER,
             SLOTS,
             i,
             n,

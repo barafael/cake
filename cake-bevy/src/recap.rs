@@ -300,6 +300,7 @@ fn open(
             &mut commands,
             &mut meshes,
             &fills,
+            CAKE_LAYER,
             METRIC_ROW,
             i,
             Metric::ALL.len(),

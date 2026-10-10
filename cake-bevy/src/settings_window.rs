@@ -270,7 +270,17 @@ fn spawn(
         };
         let (title, detail) = row.describe(settings);
         let e = segments::spawn(
-            commands, meshes, fills, slots, index, count, &title, &detail, state, row,
+            commands,
+            meshes,
+            fills,
+            OVERLAY_LAYER,
+            slots,
+            index,
+            count,
+            &title,
+            &detail,
+            state,
+            row,
         );
         commands.entity(e).insert(Segment {
             row: slots,

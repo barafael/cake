@@ -7,12 +7,16 @@
 //! with the segment's entity, and whoever spawned it acts on its own
 //! component there. Segments claim the pointer, so the map never sees a click
 //! meant for one.
+//!
+//! A segment is drawn on the render layer it is spawned on, and hit-tested
+//! where the pointer is in that layer's frame: the cake's, zoomed and panned
+//! with the map, or the overlay's, fixed to the window (the settings dial).
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
 use crate::arctext::{ArcText, Frame};
-use crate::camera::{CAKE_LAYER, Cursor};
+use crate::camera::{Cursor, OVERLAY_LAYER};
 use crate::chrome::{PointerClaimed, PointerSet, RADIUS, block_pointer};
 use crate::ringmesh::{Slots, sector_contains};
 use crate::{AppState, palette};
@@ -98,13 +102,15 @@ fn label_radii(row: &Slots, bottom: bool) -> (f32, f32) {
     }
 }
 
-/// Spawn slot `index` of `count` in `row`, titled `title`, with an optional
-/// `detail`, carrying `extra` (what it does), despawned when `state` ends.
+/// Spawn slot `index` of `count` in `row` on render layer `layer`, titled
+/// `title`, with an optional `detail`, carrying `extra` (what it does),
+/// despawned when `state` ends.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     fills: &SegmentFills,
+    layer: usize,
     row: Slots,
     index: usize,
     count: usize,
@@ -127,7 +133,7 @@ pub fn spawn(
             Mesh2d(meshes.add(row.mesh(index, count, RADIUS))),
             MeshMaterial2d(fills.idle.clone()),
             Transform::from_xyz(0.0, 0.0, -4.0),
-            RenderLayers::layer(CAKE_LAYER),
+            RenderLayers::layer(layer),
             segment,
             DespawnOnExit(state),
             extra,
@@ -152,6 +158,7 @@ pub fn spawn(
                 detail,
                 ink,
             },
+            RenderLayers::layer(layer),
             ChildOf(e),
         ));
     }
@@ -178,16 +185,22 @@ pub fn relabel(
 
 fn hover(
     cursor: Res<Cursor>,
-    segments: Query<(Entity, &Segment, &InheritedVisibility)>,
+    segments: Query<(Entity, &Segment, &RenderLayers, &InheritedVisibility)>,
     mut hover: ResMut<SegmentHover>,
     mut claimed: ResMut<PointerClaimed>,
 ) {
-    let over = cursor.cake.and_then(|p| {
-        segments
-            .iter()
-            .find(|(_, s, visible)| visible.get() && s.contains(p))
-            .map(|(e, _, _)| e)
-    });
+    let overlay = RenderLayers::layer(OVERLAY_LAYER);
+    let over = segments
+        .iter()
+        .find(|(_, s, layers, visible)| {
+            let p = if layers.intersects(&overlay) {
+                cursor.ui
+            } else {
+                cursor.cake
+            };
+            visible.get() && p.is_some_and(|p| s.contains(p))
+        })
+        .map(|(e, ..)| e);
     hover.set_if_neq(SegmentHover(over));
     if over.is_some() {
         claimed.0 = true;
