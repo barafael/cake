@@ -85,10 +85,10 @@ pub fn plugin(app: &mut App) {
     app.init_state::<AppState>()
         .init_resource::<PendingStart>()
         .add_systems(Startup, quick_start)
-        .add_systems(OnEnter(AppState::Lobby), open_socket)
         .add_systems(
             Update,
             (
+                open_socket,
                 elect_host,
                 resume_pending,
                 greet,
@@ -125,9 +125,21 @@ fn quick_start(mut input: ResMut<LobbyInput>) {
     let _ = &mut input;
 }
 
-/// Fold the socket's peer changes into [`NetState`].
-pub fn sync_peers(socket: &mut MatchboxSocket, net: &mut ResMut<NetState>) {
-    for (peer, state) in socket.update_peers() {
+/// Fold the socket's peer changes into [`NetState`]. Returns `false` once
+/// the socket has ended: signaling was lost while no peer was connected
+/// (nothing kept the socket alive), so the room is gone and [`NetState`]
+/// forgets it. The caller drops the socket; the lobby opens a new one.
+#[must_use = "a closed socket must be dropped"]
+pub fn sync_peers(socket: &mut MatchboxSocket, net: &mut ResMut<NetState>) -> bool {
+    let changes = match socket.try_update_peers() {
+        Ok(changes) => changes,
+        Err(error) => {
+            warn!(%error, "the socket ended; leaving the room");
+            net.leave_room();
+            return false;
+        }
+    };
+    for (peer, state) in changes {
         match state {
             PeerState::Connected => {
                 if !net.peers.contains(&peer) {
@@ -144,14 +156,23 @@ pub fn sync_peers(socket: &mut MatchboxSocket, net: &mut ResMut<NetState>) {
             }
         }
     }
+    true
 }
 
 /// Smallest peer id hosts. Recomputed every frame, so host loss self-heals.
-pub fn elect_host(socket: Option<ResMut<MatchboxSocket>>, mut net: ResMut<NetState>) {
+/// A socket that has ended is dropped here, and `open_socket` replaces it.
+pub fn elect_host(
+    mut commands: Commands,
+    socket: Option<ResMut<MatchboxSocket>>,
+    mut net: ResMut<NetState>,
+) {
     let Some(mut socket) = socket else {
         return;
     };
-    sync_peers(&mut socket, &mut net);
+    if !sync_peers(&mut socket, &mut net) {
+        commands.remove_resource::<MatchboxSocket>();
+        return;
+    }
     if net.my_id.is_none()
         && let Some(id) = socket.id()
     {

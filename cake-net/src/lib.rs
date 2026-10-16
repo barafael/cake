@@ -327,7 +327,8 @@ pub fn room_url(signaling: &Signaling, room: &RoomId) -> String {
 
 /// Open the room's socket, unless one is already open. The socket lives as
 /// long as the room: coming back from a match keeps it, and with it the peer
-/// ids and the host.
+/// ids and the host. Runs every lobby frame, so a socket that ended (signaling
+/// lost with no peer connected) is replaced the frame after it is dropped.
 pub fn open_socket(
     mut commands: Commands,
     room: Res<RoomId>,

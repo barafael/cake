@@ -27,6 +27,7 @@ pub fn plugin(app: &mut App) {
 
 /// Hand my commands on, and take in what arrived.
 fn pump(
+    mut commands: Commands,
     mut next: ResMut<NextState<AppState>>,
     socket: Option<ResMut<MatchboxSocket>>,
     mut net: ResMut<NetState>,
@@ -35,6 +36,15 @@ fn pump(
     mut pending: ResMut<PendingStart>,
 ) {
     let outbox = std::mem::take(&mut m.outbox);
+    // A socket that ended mid-match had no peer left to keep it alive, so
+    // this peer plays on alone, as if it never had one.
+    let mut socket = socket;
+    if let Some(s) = socket.as_mut()
+        && !sync_peers(s, &mut net)
+    {
+        commands.remove_resource::<MatchboxSocket>();
+        socket = None;
+    }
     let Some(mut socket) = socket else {
         // No socket at all: this peer is alone and is its own host.
         if let (Some(me), Some(host)) = (m.me, m.host.as_mut()) {
@@ -44,7 +54,6 @@ fn pump(
         }
         return;
     };
-    sync_peers(&mut socket, &mut net);
 
     if let Some(host_peer) = m.host_peer
         && !net.peers.contains(&host_peer)
