@@ -147,11 +147,10 @@ fn rebuild(
         &ArcText,
         Option<&RenderLayers>,
         Option<&Built>,
-        Option<&Children>,
     )>,
 ) {
     let cake = RenderLayers::layer(CAKE_LAYER);
-    for (entity, label, layers, built, children) in &labels {
+    for (entity, label, layers, built) in &labels {
         let layers = layers.unwrap_or(&cake);
         let zoom = if layers.intersects(&cake) {
             rig.zoom
@@ -163,32 +162,40 @@ fn rebuild(
         {
             continue;
         }
-        commands.entity(entity).insert(Built {
+        let built = Built {
             text: label.text.clone(),
             size: label.size,
             raster,
-        });
-        if let Some(children) = children {
-            for c in children.iter() {
-                commands.entity(c).despawn();
-            }
-        }
-        for (i, ch) in label.text.chars().enumerate() {
-            if ch == ' ' {
-                continue;
-            }
-            commands.spawn((
-                Text2d::new(ch.to_string()),
-                TextFont {
-                    font_size: FontSize::Px(label.size * raster),
-                    ..default()
-                },
-                TextColor(label.color),
-                Glyph(i),
-                layers.clone(),
-                ChildOf(entity),
-            ));
-        }
+        };
+        let color = label.color;
+        let layers = layers.clone();
+        // One entity command, silenced: a label that another system despawns
+        // this same frame (the lobby ring's, a closing dial's) is simply not
+        // built, where separate commands would insert into, and parent glyphs
+        // to, an entity that is gone.
+        commands
+            .entity(entity)
+            .queue_silenced(move |mut label: EntityWorldMut| {
+                label.despawn_related::<Children>();
+                label.with_children(|glyphs| {
+                    for (i, ch) in built.text.chars().enumerate() {
+                        if ch == ' ' {
+                            continue;
+                        }
+                        glyphs.spawn((
+                            Text2d::new(ch.to_string()),
+                            TextFont {
+                                font_size: FontSize::Px(built.size * built.raster),
+                                ..default()
+                            },
+                            TextColor(color),
+                            Glyph(i),
+                            layers.clone(),
+                        ));
+                    }
+                });
+                label.insert(built);
+            });
     }
 }
 
